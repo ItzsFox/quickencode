@@ -10,6 +10,8 @@ pub fn run() {
             commands::get_encoded_frame,
             commands::encode_video_with_progress,
             commands::scan_folder_for_videos,
+            commands::get_file_size_mb,
+            commands::show_in_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error running app");
