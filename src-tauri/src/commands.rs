@@ -42,29 +42,29 @@ fn is_video(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Scan a folder (non-recursive) for video files.
-/// Returns an empty Vec (not an error) when the path isn't a directory or contains no videos.
+/// Walk a directory recursively, collecting all video file paths.
+fn walk_videos(dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            walk_videos(&p, out);
+        } else if p.is_file() && is_video(&p) {
+            if let Some(s) = p.to_str() {
+                out.push(s.to_string());
+            }
+        }
+    }
+}
+
+/// Scan a folder recursively for video files.
+/// Returns a sorted Vec of absolute paths (empty if no videos found).
 #[tauri::command]
 pub fn scan_folder_for_videos(folder: String) -> Vec<String> {
     let p = std::path::Path::new(&folder);
     if !p.is_dir() { return vec![]; }
-
-    let mut videos: Vec<String> = std::fs::read_dir(p)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|e| {
-                    let ep = e.path();
-                    if ep.is_file() && is_video(&ep) {
-                        ep.to_str().map(|s| s.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
+    let mut videos = Vec::new();
+    walk_videos(p, &mut videos);
     videos.sort();
     videos
 }
