@@ -10,6 +10,12 @@
   --border-2:  rgba(116,140,171,0.32);
 }
 
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -17,22 +23,20 @@ body {
   font-size: 14px;
   line-height: 1.5;
   user-select: none;
-  overflow: hidden;
-  height: 100vh;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-}
-
-.app {
-  width: 100%;
-  height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
+.app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* ════════════════════════════════════════
-   DROP SCREEN (full-screen before upload)
+   DROP SCREEN
    ════════════════════════════════════════ */
 .drop-screen {
   flex: 1;
@@ -142,18 +146,17 @@ body {
 }
 
 /* ════════════════════════════════════════
-   MAIN EDITOR
+   MAIN EDITOR — true full-window layout
    ════════════════════════════════════════ */
 .editor {
   flex: 1;
-  display: flex;
-  flex-direction: column;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto auto;
+  /* topbar | info strip | preview | frame nav | settings | bottom bar */
+  padding: 10px 16px 8px;
+  gap: 8px;
   overflow: hidden;
-  max-width: 1000px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 14px 24px 10px;
-  gap: 12px;
 }
 
 /* ── Top bar ── */
@@ -180,7 +183,7 @@ body {
   border-radius: 8px; padding: 4px 10px;
   font-size: 12px; color: var(--muted); cursor: pointer;
   transition: border-color 0.15s;
-  max-width: 220px;
+  max-width: 260px;
 }
 .file-chip:hover { border-color: var(--muted); }
 .file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
@@ -205,23 +208,41 @@ body {
 .info-pill-label { color: var(--muted); }
 .info-pill-val { color: var(--text); font-weight: 600; }
 
-/* ── Preview ── */
-.preview-section { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+/* ── Preview — fills all remaining space ── */
+.preview-section {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
 .preview-grid {
-  display: grid; grid-template-columns: 1fr 1fr;
-  gap: 8px; flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 .preview-side {
   position: relative;
   border-radius: 10px; overflow: hidden;
   background: var(--bg);
   border: 1px solid var(--border);
-  min-height: 0; cursor: pointer;
+  cursor: pointer;
   transition: border-color 0.2s;
+  /* fill available height fully */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
 }
 .preview-side:hover { border-color: var(--muted); }
 .preview-side img {
-  width: 100%; height: 100%; object-fit: cover; display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 .preview-tag {
   position: absolute; top: 8px; left: 8px; z-index: 5;
@@ -254,6 +275,7 @@ body {
 /* Frame nav bar */
 .frame-nav {
   display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding-top: 6px;
   flex-shrink: 0;
 }
 .frame-nav-btn {
@@ -283,17 +305,17 @@ body {
 /* ── Settings row ── */
 .settings-row {
   display: grid;
-  grid-template-columns: 1fr 1px 1.2fr;
-  gap: 0 14px;
+  grid-template-columns: 1fr 1px 1.4fr;
+  gap: 0 16px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px; padding: 12px 16px;
+  border-radius: 12px; padding: 10px 16px;
   flex-shrink: 0;
 }
 .settings-divider { background: var(--border); width: 1px; }
 
 /* Quality side */
-.quality-col { display: flex; flex-direction: column; gap: 8px; }
+.quality-col { display: flex; flex-direction: column; gap: 6px; }
 .quality-header { display: flex; align-items: baseline; justify-content: space-between; }
 .section-label {
   font-size: 10px; color: var(--muted);
@@ -326,11 +348,11 @@ input[type="range"]:hover::-webkit-slider-thumb {
 }
 .range-labels {
   display: flex; justify-content: space-between;
-  font-size: 10px; color: rgba(116,140,171,0.45); margin-top: 4px;
+  font-size: 10px; color: rgba(116,140,171,0.45); margin-top: 2px;
 }
 
 /* Options side */
-.options-col { display: flex; flex-direction: column; gap: 8px; }
+.options-col { display: flex; flex-direction: column; gap: 6px; }
 .options-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
 .setting { display: flex; flex-direction: column; gap: 4px; }
 .setting label {

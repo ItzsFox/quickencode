@@ -57,7 +57,6 @@ function basename(p: string) { return p.split(/[\\/]/).pop() ?? p; }
 function discordBr(dur: number) {
   return Math.max(Math.floor((DISCORD_TARGET * 8 * 1024) / dur) - DISCORD_AUDIO, 80);
 }
-// Timestamp for frame index i out of FRAME_COUNT
 function frameTs(i: number, duration: number) {
   return duration * (i + 0.5) / FRAME_COUNT;
 }
@@ -71,28 +70,25 @@ export default function App() {
   const [info, setInfo]                = useState<VideoInfo | null>(null);
   const [dragOver, setDragOver]        = useState(false);
 
-  // Frames — original (all 10 loaded upfront) + encoded (loaded lazily per frame)
   const [origFrames, setOrigFrames]    = useState<string[]>([]);
   const [encFrames, setEncFrames]      = useState<Record<number, string>>({});
   const [encLoading, setEncLoading]    = useState(false);
   const [frameIdx, setFrameIdx]        = useState(0);
 
-  // Settings
   const [resolution, setRes]           = useState("original");
   const [format, setFmt]               = useState("mp4");
   const [quality, setQuality]          = useState(75);
   const [audio, setAudio]              = useState(128);
   const [fps, setFps]                  = useState("original");
 
-  // Encoding
   const [encoding, setEncoding]        = useState(false);
   const [progress, setProgress]        = useState<EncodeProgress | null>(null);
 
-  // Fullscreen modal
   const [fsImage, setFsImage]          = useState<{src: string; label: string} | null>(null);
-
-  // Status
   const [status, setStatus]            = useState("");
+
+  // Track preview container height so images fill it properly
+  const previewRef = useRef<HTMLDivElement>(null);
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -105,7 +101,6 @@ export default function App() {
   const estLow  = estMb * 0.85;
   const estHigh = estMb * 1.15;
   const reduction = info ? Math.round((1 - estMb / info.size_mb) * 100) : 0;
-  const aspectRatio = info ? `${info.width} / ${info.height}` : "16 / 9";
   const sizeClass =
     reduction < 0  ? "better" :
     reduction < 40 ? "good"   :
@@ -135,14 +130,12 @@ export default function App() {
     }, 600);
   }, [filePath, info]);
 
-  // Reload encoded frame when settings change
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     setEncFrames({});
     loadEncodedFrame(frameIdx, videoBr, resolution, fps);
   }, [videoBr, resolution, fps, screen]);
 
-  // Load encoded frame when navigating to a new frame
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     if (!encFrames[frameIdx]) {
@@ -166,7 +159,6 @@ export default function App() {
       setInfo(videoInfo);
       setOrigFrames(frames);
       setScreen("editor");
-      // Load first encoded frame
       const b = resolution === "original"
         ? videoInfo.bitrate_kbps
         : RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps;
@@ -183,7 +175,7 @@ export default function App() {
     let off: (() => void) | undefined;
     getCurrentWebview().onDragDropEvent((ev) => {
       const t = ev.payload.type;
-      if (t === "over")                    setDragOver(true);
+      if (t === "over")  setDragOver(true);
       if (t === "leave") setDragOver(false);
       if (t === "drop") {
         setDragOver(false);
@@ -194,7 +186,7 @@ export default function App() {
     return () => off?.();
   }, [loadFile]);
 
-  // ── Listen to encode progress events ──────────────────────────────────────
+  // ── Encode progress events ─────────────────────────────────────────────────
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<EncodeProgress>("encode-progress", (ev) => {
@@ -212,7 +204,6 @@ export default function App() {
     if (p) loadFile(p as string);
   };
 
-  // ── Navigate frames ────────────────────────────────────────────────────────
   const goFrame = (delta: number) => {
     const next = Math.max(0, Math.min(FRAME_COUNT - 1, frameIdx + delta));
     setFrameIdx(next);
@@ -241,7 +232,6 @@ export default function App() {
     } catch (e) {
       setStatus(`❌ ${e}`);
     } finally {
-      // progress bar stays at 100% briefly then clears
       setTimeout(() => {
         setEncoding(false);
         setProgress(null);
@@ -376,17 +366,16 @@ export default function App() {
             </div>
           </div>
 
-          {/* Preview + frame nav */}
-          <div className="preview-section">
+          {/* Preview + frame nav — fills all remaining space */}
+          <div className="preview-section" ref={previewRef}>
             <div className="preview-grid">
               {/* Original */}
               <div
                 className="preview-side"
-                style={{ aspectRatio }}
                 onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}
               >
                 {currentOrig ? (
-                  <img src={`data:image/jpeg;base64,${currentOrig}`} />
+                  <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original frame" />
                 ) : (
                   <div className="preview-loading">
                     <div className="spin" /><span>Loading...</span>
@@ -404,7 +393,6 @@ export default function App() {
               {/* Encoded */}
               <div
                 className="preview-side"
-                style={{ aspectRatio }}
                 onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
               >
                 {encLoading ? (
@@ -412,7 +400,7 @@ export default function App() {
                     <div className="spin" /><span>Rendering...</span>
                   </div>
                 ) : currentEnc ? (
-                  <img src={`data:image/jpeg;base64,${currentEnc}`} />
+                  <img src={`data:image/jpeg;base64,${currentEnc}`} alt="Encoded frame" />
                 ) : (
                   <div className="preview-loading">
                     <div className="spin" /><span>Loading...</span>
@@ -461,7 +449,6 @@ export default function App() {
 
           {/* Quality + Settings */}
           <div className="settings-row">
-            {/* Quality */}
             <div className="quality-col">
               <div className="quality-header">
                 <span className="section-label">Quality</span>
@@ -481,7 +468,6 @@ export default function App() {
 
             <div className="settings-divider" />
 
-            {/* Options */}
             <div className="options-col">
               <span className="section-label">Settings</span>
               <div className="options-grid">
@@ -524,7 +510,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Presets + encode */}
+          {/* Bottom bar */}
           <div className="bottom-bar">
             <div className={`size-box ${sizeClass}`}>
               <span className="size-lbl">Estimated output</span>
@@ -605,6 +591,7 @@ export default function App() {
           <span className="fullscreen-label">{fsImage.label}</span>
           <img
             src={`data:image/jpeg;base64,${fsImage.src}`}
+            alt={fsImage.label}
             onClick={e => e.stopPropagation()}
           />
           <div className="fullscreen-close" onClick={() => setFsImage(null)}>✕</div>

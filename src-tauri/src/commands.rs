@@ -1,37 +1,50 @@
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
-pub fn resolve_bin(name: &str) -> Result<std::path::PathBuf, String> {
-    let filename = format!("{name}-x86_64-pc-windows-msvc.exe");
+/// Resolve a sidecar binary using Tauri's proper resource resolution.
+///
+/// In dev mode: looks in `src-tauri/binaries/<name>-<target-triple>.exe`
+/// In release: uses Tauri's resource_dir, which is where externalBin
+/// binaries are correctly placed by the bundler.
+pub fn resolve_bin(app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
+    // Build the target-triple-suffixed filename that Tauri's sidecar bundler uses.
+    // The triple is baked in at compile time via the TAURI_TARGET_TRIPLE env var
+    // (set automatically by `tauri build`), or we fall back to the host triple.
+    let triple = option_env!("TAURI_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
+    let filename = format!("{name}-{triple}.exe");
 
+    // Dev: binaries live next to Cargo.toml
     #[cfg(debug_assertions)]
     {
         let bin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(&filename);
-
         if bin.exists() {
             return Ok(bin);
         }
-
-        return Err(format!("Binary not found: {}", bin.display()));
+        return Err(format!("[dev] Binary not found at: {}", bin.display()));
     }
 
+    // Release: Tauri bundles sidecars into the resource directory.
+    // resource_dir() is the canonical location — do NOT use current_exe().parent().
     #[cfg(not(debug_assertions))]
     {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let bin = exe
-            .parent()
-            .ok_or("no parent dir")?
-            .join(&filename);
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("Could not resolve resource_dir: {e}"))?;
 
+        let bin = resource_dir.join(&filename);
         if bin.exists() {
-            Ok(bin)
-        } else {
-            Err(format!("Binary not found: {}", bin.display()))
+            return Ok(bin);
         }
+        Err(format!(
+            "[release] Binary not found at: {}\nMake sure '{}' is listed under bundle.externalBin in tauri.conf.json",
+            bin.display(),
+            name
+        ))
     }
 }
 
@@ -52,8 +65,8 @@ pub struct EncodeProgress {
 }
 
 #[tauri::command]
-pub fn get_video_info(input: String) -> Result<VideoInfo, String> {
-    let ffprobe = resolve_bin("ffprobe")?;
+pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo, String> {
+    let ffprobe = resolve_bin(&app, "ffprobe")?;
 
     let fmt_out = Command::new(&ffprobe)
         .args(["-v", "quiet", "-print_format", "json", "-show_format", &input])
@@ -94,10 +107,14 @@ pub fn get_video_info(input: String) -> Result<VideoInfo, String> {
 }
 
 #[tauri::command]
-pub async fn get_video_frames(input: String, count: usize) -> Result<Vec<String>, String> {
+pub async fn get_video_frames(
+    app: tauri::AppHandle,
+    input: String,
+    count: usize,
+) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let ffmpeg  = resolve_bin("ffmpeg")?;
-        let ffprobe = resolve_bin("ffprobe")?;
+        let ffmpeg  = resolve_bin(&app, "ffmpeg")?;
+        let ffprobe = resolve_bin(&app, "ffprobe")?;
 
         let fmt_out = Command::new(&ffprobe)
             .args(["-v", "quiet", "-print_format", "json", "-show_format", &input])
@@ -134,6 +151,7 @@ pub async fn get_video_frames(input: String, count: usize) -> Result<Vec<String>
 
 #[tauri::command]
 pub async fn get_encoded_frame(
+    app: tauri::AppHandle,
     input: String,
     timestamp: f64,
     resolution: String,
@@ -141,7 +159,7 @@ pub async fn get_encoded_frame(
     fps: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let ffmpeg  = resolve_bin("ffmpeg")?;
+        let ffmpeg  = resolve_bin(&app, "ffmpeg")?;
         let clip    = std::env::temp_dir().join("qe_enc_preview.mp4");
         let frame   = std::env::temp_dir().join("qe_enc_frame.jpg");
         let clip_s  = clip.to_str().unwrap().to_string();
@@ -201,7 +219,7 @@ pub async fn encode_video_with_progress(
     duration_secs: f64,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let ffmpeg      = resolve_bin("ffmpeg")?;
+        let ffmpeg      = resolve_bin(&app, "ffmpeg")?;
         let video_bv    = format!("{}k", video_bitrate_kbps);
         let audio_ba    = format!("{}k", audio_bitrate_kbps);
         let passlog     = std::env::temp_dir().join("qe_passlog");
