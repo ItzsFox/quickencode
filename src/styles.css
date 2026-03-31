@@ -94,6 +94,25 @@ body {
   overflow: hidden;
 }
 
+/* ── Wordmark (logo + text) ── */
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+}
+.wordmark span {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.1px;
+}
+.wordmark-sm span { font-size: 12px; }
+.wordmark em {
+  font-style: normal;
+  color: var(--text-dim);
+  font-weight: 300;
+}
+
 /* ══════════════════════════════════════════
    DROP SCREEN
    ══════════════════════════════════════════ */
@@ -110,22 +129,28 @@ body {
   border-radius: var(--radius-card);
   transition: border-color 0.18s, background 0.18s;
   cursor: pointer;
+  position: relative;
 }
 .drop-screen.drag-over {
   background: var(--accent-dim);
   border-color: var(--border-2);
 }
+.drop-theme-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
 .drop-wordmark {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  color: var(--text);
 }
 .drop-wordmark h1 {
   font-size: 21px;
   font-weight: 700;
   letter-spacing: -0.2px;
-  color: var(--text);
 }
 .drop-wordmark h1 em {
   font-style: normal;
@@ -168,15 +193,6 @@ body {
   box-shadow: var(--shadow-sm);
 }
 .drop-browse:hover { opacity: 0.82; }
-.drop-browse.secondary {
-  background: var(--surface);
-  color: var(--text-muted);
-  border: 1px solid var(--border-2);
-}
-.drop-browse.secondary:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
 
 /* ══════════════════════════════════════════
    LOADING SCREEN
@@ -190,7 +206,10 @@ body {
   gap: 24px;
 }
 .loading-wordmark {
-  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-muted);
   letter-spacing: -0.2px;
@@ -246,16 +265,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-.batch-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-}
-.batch-title em {
-  font-style: normal;
-  color: var(--text-dim);
-  font-weight: 300;
 }
 .batch-topbar-right {
   display: flex;
@@ -349,19 +358,8 @@ body {
 }
 .topbar-left {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
-}
-.topbar-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  letter-spacing: -0.1px;
-}
-.topbar-name em {
-  font-style: normal;
-  color: var(--text-dim);
-  font-weight: 300;
 }
 .topbar-right {
   display: flex;
@@ -392,7 +390,7 @@ body {
 }
 .file-chip-x { color: var(--text-dim); flex-shrink: 0; font-size: 9px; }
 
-/* Theme toggle */
+/* Theme toggle — flex center is critical */
 .theme-toggle {
   width: 30px;
   height: 30px;
@@ -403,12 +401,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
   color: var(--text-muted);
   transition: background 0.14s, border-color 0.14s, color 0.14s;
   flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
 }
 .theme-toggle:hover { background: var(--surface-3); border-color: var(--border-2); color: var(--text); }
+.theme-toggle svg { display: block; }
 
 .version-badge {
   font-size: 10.5px;

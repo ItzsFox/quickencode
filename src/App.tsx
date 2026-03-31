@@ -29,7 +29,6 @@ const VIDEO_EXTS     = new Set(["mp4","mkv","avi","mov","webm","m4v","wmv","flv"
 const RES_BITRATES: Record<string, number> = {
   "1080p": 5000, "720p": 2500, "480p": 1000,
 };
-const THEME_KEY = "qe_theme";
 
 function fmtTime(s: number) {
   const h   = Math.floor(s / 3600);
@@ -43,7 +42,7 @@ function fmtMb(mb: number) {
   return mb >= 1024 ? `${(mb/1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
 }
 function fmtEta(s: number) {
-  if (s <= 0) return "\u2014";
+  if (s <= 0) return "—";
   if (s < 60) return `${Math.ceil(s)}s`;
   return `${Math.floor(s/60)}m ${Math.ceil(s%60)}s`;
 }
@@ -70,6 +69,20 @@ function isVideo(p: string) {
   return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
+// ── Logo SVG (inline, currentColor-aware) ──
+const QELogo = ({ size = 20 }: { size?: number }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={size} height={size}
+    viewBox="0 0 85 85"
+    fill="currentColor"
+    aria-label="quick encode logo"
+    style={{ flexShrink: 0, display: "block" }}
+  >
+    <path d="M80 30C82.7614 30 85 32.2386 85 35V80C85 82.7614 82.7614 85 80 85H35C32.2386 85 30 82.7614 30 80V69H65C67.2091 69 69 67.2091 69 65V30H80ZM65 16C67.2091 16 69 17.7909 69 20V30H55V50C55 52.7614 52.7614 55 50 55H30V69H20C17.7909 69 16 67.2091 16 65V55H30V35C30 32.2386 32.2386 30 35 30H55V16H65ZM50 0C52.7614 0 55 2.23858 55 5V16H20C17.7909 16 16 17.7909 16 20V55H5C2.23858 55 0 52.7614 0 50V5C0 2.23858 2.23858 0 5 0H50Z" />
+  </svg>
+);
+
 // Discord icon SVG — uses currentColor so it flips with theme
 const DiscordIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -82,14 +95,14 @@ type Screen = "drop" | "loading" | "editor" | "batch";
 export default function App() {
   // ── Theme ──
   const initTheme = (): "light" | "dark" => {
-    try { return (localStorage.getItem(THEME_KEY) as "light" | "dark") ?? "light"; }
+    try { return (localStorage.getItem("qe_theme") as "light" | "dark") ?? "light"; }
     catch { return "light"; }
   };
   const [theme, setThemeState] = useState<"light" | "dark">(initTheme);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+    try { localStorage.setItem("qe_theme", theme); } catch {}
   }, [theme]);
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, []);
 
@@ -184,25 +197,22 @@ export default function App() {
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
       loadEncodedFrame(0, vbr, resolution, fps);
     } catch (e) {
-      setStatus(`\u274C ${e}`);
+      setStatus(`❌ ${e}`);
       setScreen("drop");
     }
   }, [resolution, quality, fps]);
 
-  // ── Resolve dropped paths — handle folders by scanning for video files ──
+  // ── Resolve dropped paths ──
   const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
     const videos: string[] = [];
     for (const p of paths) {
       if (isVideo(p)) {
         videos.push(p);
       } else {
-        // Attempt to treat as folder — ask Rust to scan it
         try {
           const found = await invoke<string[]>("scan_folder_for_videos", { folder: p });
           videos.push(...found);
-        } catch {
-          // Not a folder or scan failed — skip silently
-        }
+        } catch { /* skip */ }
       }
     }
     return videos;
@@ -245,7 +255,7 @@ export default function App() {
     return () => unlisten?.();
   }, [batchRunning]);
 
-  // ── Pick files (single or multi — one button) ──
+  // ── Pick files ──
   const pickFiles = async () => {
     const result = await open({
       multiple: true,
@@ -277,7 +287,7 @@ export default function App() {
         durationSecs: info.duration_secs,
       });
     } catch (e) {
-      setStatus(`\u274C ${e}`);
+      setStatus(`❌ ${e}`);
     } finally {
       setTimeout(() => { setEncoding(false); setProgress(null); }, 1800);
     }
@@ -286,7 +296,7 @@ export default function App() {
   const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
   const handleDiscord = async () => {
     if (!info) return;
-    if (info.size_mb <= 10) { setStatus("\u2705 Already under 10 MB \u2014 no compression needed."); return; }
+    if (info.size_mb <= 10) { setStatus("✅ Already under 10 MB — no compression needed."); return; }
     const vbr = discordBr(info.duration_secs);
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
@@ -376,13 +386,41 @@ export default function App() {
     );
   };
 
-  // Theme toggle — stopPropagation so drop screen click doesn't fire
+  // Wordmark with logo
+  const Wordmark = ({ size = "base" }: { size?: "sm" | "base" }) => (
+    <div className={`wordmark wordmark-${size}`}>
+      <QELogo size={size === "sm" ? 14 : 17} />
+      <span>quick encode<em>.</em></span>
+    </div>
+  );
+
+  // Theme toggle — proper SVG icons, centered
   const ThemeBtn = () => (
-    <button className="theme-toggle" onClick={toggleTheme}
+    <button
+      className="theme-toggle"
+      onClick={toggleTheme}
       title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
       aria-label="Toggle theme"
     >
-      {theme === "light" ? "\u263E" : "\u2600"}
+      {theme === "light" ? (
+        // Moon icon
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      ) : (
+        // Sun icon
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="5"/>
+          <line x1="12" y1="1" x2="12" y2="3"/>
+          <line x1="12" y1="21" x2="12" y2="23"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+          <line x1="1" y1="12" x2="3" y2="12"/>
+          <line x1="21" y1="12" x2="23" y2="12"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+      )}
     </button>
   );
 
@@ -395,18 +433,18 @@ export default function App() {
           className={`drop-screen${dragOver ? " drag-over" : ""}`}
           onClick={pickFiles}
         >
-          {/* Theme toggle sits in corner, stopPropagation prevents opening file picker */}
           <div className="drop-theme-btn">
             <ThemeBtn />
           </div>
 
           <div className="drop-wordmark">
+            <QELogo size={36} />
             <h1>quick encode<em>.</em></h1>
             <small>video compressor</small>
           </div>
           <div className="drop-hint-text">
             <p>{dragOver ? "Drop to load" : "Drop files or folders here, or"}</p>
-            <small>MP4 \u00B7 MKV \u00B7 AVI \u00B7 MOV \u00B7 WebM \u00B7 M4V \u00B7 select multiple for batch</small>
+            <small>MP4 · MKV · AVI · MOV · WebM · M4V · select multiple for batch</small>
           </div>
           <div className="drop-actions">
             <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFiles(); }}>
@@ -420,10 +458,13 @@ export default function App() {
       {/* ── LOADING ── */}
       {screen === "loading" && (
         <div className="loading-screen">
-          <div className="loading-wordmark">quick encode<em>.</em></div>
+          <div className="loading-wordmark">
+            <QELogo size={18} />
+            <span>quick encode<em>.</em></span>
+          </div>
           <div className="loading-bar-wrap">
             <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
-            <div className="loading-label">Reading file &amp; extracting frames\u2026</div>
+            <div className="loading-label">Reading file &amp; extracting frames…</div>
           </div>
         </div>
       )}
@@ -432,13 +473,13 @@ export default function App() {
       {screen === "batch" && (
         <div className="batch-screen">
           <div className="batch-topbar">
-            <span className="batch-title">quick encode<em>.</em></span>
+            <Wordmark size="sm" />
             <div className="batch-topbar-right">
               <span className="batch-count">{batchFiles.length} file{batchFiles.length !== 1 ? "s" : ""}</span>
               <ThemeBtn />
               <button className="file-chip" onClick={reset}>
                 <span>Clear all</span>
-                <span className="file-chip-x">\u2715</span>
+                <span className="file-chip-x">×</span>
               </button>
             </div>
           </div>
@@ -446,16 +487,16 @@ export default function App() {
           <div className="batch-file-list">
             {batchFiles.map((f, i) => (
               <div key={f.path} className="batch-file-row">
-                <span className="batch-file-icon">\u25B6</span>
+                <span className="batch-file-icon">▶</span>
                 <span className="batch-file-name" title={f.path}>{basename(f.path)}</span>
                 <span className={`batch-file-status ${f.status}`}>
                   {f.status === "pending" ? "Pending"
-                    : f.status === "active" ? "Encoding\u2026"
-                    : f.status === "done"   ? "\u2713 Done"
-                    : "\u2715 Error"}
+                    : f.status === "active" ? "Encoding…"
+                    : f.status === "done"   ? "✓ Done"
+                    : "✕ Error"}
                 </span>
                 {!batchRunning && f.status !== "active" && (
-                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>\u2715</button>
+                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>×</button>
                 )}
               </div>
             ))}
@@ -527,22 +568,22 @@ export default function App() {
               <div style={{ flex: 1 }} />
               {batchProgress && (
                 <span className="batch-count">
-                  {batchProgress.idx + 1}/{batchFiles.length} \u00B7 {Math.round(batchProgress.enc.percent)}%
+                  {batchProgress.idx + 1}/{batchFiles.length} · {Math.round(batchProgress.enc.percent)}%
                 </span>
               )}
               <button
                 className="preset-btn"
                 onClick={() => startBatch(true)}
                 disabled={batchRunning}
-                title="Encode all files targeting \u22649 MB for Discord"
+                title="Encode all files targeting ≤9 MB for Discord"
               >
                 <DiscordIcon />
                 Discord Ready
-                <span className="preset-size">\u22649 MB each</span>
+                <span className="preset-size">≤9 MB each</span>
               </button>
               <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
                 {batchRunning
-                  ? <span className="btn-inner"><div className="spin" />Encoding\u2026</span>
+                  ? <span className="btn-inner"><div className="spin" />Encoding…</span>
                   : `Encode All (${batchFiles.length})`}
               </button>
             </div>
@@ -557,12 +598,12 @@ export default function App() {
 
           <div className="topbar">
             <div className="topbar-left">
-              <span className="topbar-name">quick encode<em>.</em></span>
+              <Wordmark size="sm" />
             </div>
             <div className="topbar-right">
               <div className="file-chip" onClick={reset}>
                 <span>{basename(filePath)}</span>
-                <span className="file-chip-x">\u2715</span>
+                <span className="file-chip-x">×</span>
               </div>
               <ThemeBtn />
               <span className="version-badge">v2.0</span>
@@ -575,7 +616,7 @@ export default function App() {
               const items = [
                 { label: "Duration", val: fmtTime(info.duration_secs) },
                 { label: "Size",     val: fmtMb(info.size_mb) },
-                { label: "Res",      val: `${info.width}\u00D7${info.height}` },
+                { label: "Res",      val: `${info.width}×${info.height}` },
                 { label: "Bitrate",  val: `${(info.bitrate_kbps/1000).toFixed(1)} Mbps` },
                 { label: "Aspect",   val: `${info.width/d}:${info.height/d}` },
               ];
@@ -603,7 +644,7 @@ export default function App() {
                 {currentOrig && (
                   <button className="preview-fullscreen-btn"
                     onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}
-                  >\u26F6</button>
+                  >⛶</button>
                 )}
               </div>
 
@@ -622,13 +663,13 @@ export default function App() {
                 {currentEnc && !encLoading && (
                   <button className="preview-fullscreen-btn"
                     onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}
-                  >\u26F6</button>
+                  >⛶</button>
                 )}
               </div>
             </div>
 
             <div className="frame-nav">
-              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>\u2039</button>
+              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
               <div className="frame-dots">
                 {Array.from({ length: FRAME_COUNT }, (_, i) => (
                   <button key={i}
@@ -637,9 +678,9 @@ export default function App() {
                   />
                 ))}
               </div>
-              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>\u203A</button>
+              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
               <span className="frame-label">
-                {frameIdx + 1} / {FRAME_COUNT} \u00B7 {fmtTime(frameTs(frameIdx, info.duration_secs))}
+                {frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}
               </span>
             </div>
           </div>
@@ -651,7 +692,7 @@ export default function App() {
                 <div className="quality-values">
                   <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
                   <span className="q-pct">{quality}%</span>
-                  <span className="q-est">\u2248 {fmtMb(estLow)}\u2013{fmtMb(estHigh)}</span>
+                  <span className="q-est">≈ {fmtMb(estLow)}–{fmtMb(estHigh)}</span>
                 </div>
               </div>
               <input type="range" min={5} max={100} value={quality}
@@ -705,23 +746,23 @@ export default function App() {
 
           <div className="bottom-bar">
             <div className="est-inline">
-              <span className="est-val">{fmtMb(estLow)} \u2013 {fmtMb(estHigh)}</span>
+              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
               {reduction !== 0 && (
-                <span className="est-diff">{reduction > 0 ? `\u2212${reduction}%` : `+${Math.abs(reduction)}%`}</span>
+                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
 
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title={`Targets ${DISCORD_TARGET} MB \u2014 ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}
+              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}
             >
               <DiscordIcon />
               Discord Ready
-              <span className="preset-size">\u226410 MB</span>
+              <span className="preset-size">≤10 MB</span>
             </button>
 
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
               {encoding
-                ? <span className="btn-inner"><div className="spin" />Encoding\u2026</span>
+                ? <span className="btn-inner"><div className="spin" />Encoding…</span>
                 : "Start Encode"}
             </button>
           </div>
@@ -735,11 +776,11 @@ export default function App() {
         <div className="progress-overlay">
           <div className="progress-card">
             <div className="progress-title">
-              {progress.percent >= 100 ? "Done" : "Encoding\u2026"}
+              {progress.percent >= 100 ? "Done" : "Encoding…"}
             </div>
             <div className="progress-pass">
-              {progress.percent < 50 ? "Pass 1 / 2 \u2014 Analyzing"
-                : progress.percent < 100 ? "Pass 2 / 2 \u2014 Encoding"
+              {progress.percent < 50 ? "Pass 1 / 2 — Analyzing"
+                : progress.percent < 100 ? "Pass 2 / 2 — Encoding"
                 : "Finalizing"}
             </div>
             <div className="progress-bar-wrap">
@@ -756,7 +797,7 @@ export default function App() {
                     ? <span className="progress-done-msg">Complete</span>
                     : progress.percent >= 50 && progress.eta_secs > 0
                       ? `ETA ${fmtEta(progress.eta_secs)}`
-                      : "Calculating\u2026"}
+                      : "Calculating…"}
                 </span>
               </div>
             </div>
@@ -770,7 +811,7 @@ export default function App() {
           <span className="fullscreen-label">{fsImage.label}</span>
           <img src={`data:image/jpeg;base64,${fsImage.src}`} alt={fsImage.label}
             onClick={e => e.stopPropagation()} />
-          <div className="fullscreen-close" onClick={() => setFsImage(null)}>\u2715</div>
+          <div className="fullscreen-close" onClick={() => setFsImage(null)}>×</div>
         </div>
       )}
     </div>
