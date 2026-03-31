@@ -4,7 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-// ── Types ────────────────────────────────────────────────────────────────────
 interface VideoInfo {
   duration_secs: number;
   size_mb: number;
@@ -18,14 +17,13 @@ interface EncodeProgress {
   pass: number;
 }
 
-const FRAME_COUNT     = 10;
-const DISCORD_TARGET  = 9;
-const DISCORD_AUDIO   = 96;
+const FRAME_COUNT    = 10;
+const DISCORD_TARGET = 9;
+const DISCORD_AUDIO  = 96;
 const RES_BITRATES: Record<string, number> = {
   "1080p": 5000, "720p": 2500, "480p": 1000,
 };
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 function fmtTime(s: number) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -44,7 +42,7 @@ function fmtEta(s: number) {
 }
 function sliderBg(val: number, min: number, max: number) {
   const pct = ((val - min) / (max - min)) * 100;
-  return `linear-gradient(to right, #748cab ${pct}%, rgba(13,19,33,0.8) ${pct}%)`;
+  return `linear-gradient(to right, #6b6b72 ${pct}%, #26262a ${pct}%)`;
 }
 function qualityInfo(q: number) {
   if (q >= 85) return { label: "Near Lossless", cls: "c4" };
@@ -60,53 +58,39 @@ function discordBr(dur: number) {
 function frameTs(i: number, duration: number) {
   return duration * (i + 0.5) / FRAME_COUNT;
 }
+function gcd(a: number, b: number): number { return b === 0 ? a : gcd(b, a % b); }
 
-// ── App ──────────────────────────────────────────────────────────────────────
 type Screen = "drop" | "loading" | "editor";
 
 export default function App() {
-  const [screen, setScreen]            = useState<Screen>("drop");
-  const [filePath, setFilePath]        = useState("");
-  const [info, setInfo]                = useState<VideoInfo | null>(null);
-  const [dragOver, setDragOver]        = useState(false);
+  const [screen, setScreen]         = useState<Screen>("drop");
+  const [filePath, setFilePath]     = useState("");
+  const [info, setInfo]             = useState<VideoInfo | null>(null);
+  const [dragOver, setDragOver]     = useState(false);
+  const [origFrames, setOrigFrames] = useState<string[]>([]);
+  const [encFrames, setEncFrames]   = useState<Record<number, string>>({});
+  const [encLoading, setEncLoading] = useState(false);
+  const [frameIdx, setFrameIdx]     = useState(0);
+  const [resolution, setRes]        = useState("original");
+  const [format, setFmt]            = useState("mp4");
+  const [quality, setQuality]       = useState(75);
+  const [audio, setAudio]           = useState(128);
+  const [fps, setFps]               = useState("original");
+  const [encoding, setEncoding]     = useState(false);
+  const [progress, setProgress]     = useState<EncodeProgress | null>(null);
+  const [fsImage, setFsImage]       = useState<{src: string; label: string} | null>(null);
+  const [status, setStatus]         = useState("");
 
-  const [origFrames, setOrigFrames]    = useState<string[]>([]);
-  const [encFrames, setEncFrames]      = useState<Record<number, string>>({});
-  const [encLoading, setEncLoading]    = useState(false);
-  const [frameIdx, setFrameIdx]        = useState(0);
-
-  const [resolution, setRes]           = useState("original");
-  const [format, setFmt]               = useState("mp4");
-  const [quality, setQuality]          = useState(75);
-  const [audio, setAudio]              = useState(128);
-  const [fps, setFps]                  = useState("original");
-
-  const [encoding, setEncoding]        = useState(false);
-  const [progress, setProgress]        = useState<EncodeProgress | null>(null);
-
-  const [fsImage, setFsImage]          = useState<{src: string; label: string} | null>(null);
-  const [status, setStatus]            = useState("");
-
-  // Track preview container height so images fill it properly
-  const previewRef = useRef<HTMLDivElement>(null);
-
+  const previewRef  = useRef<HTMLDivElement>(null);
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-  const base    = resolution === "original"
-    ? (info?.bitrate_kbps ?? 5000)
-    : RES_BITRATES[resolution];
+  const base    = resolution === "original" ? (info?.bitrate_kbps ?? 5000) : RES_BITRATES[resolution];
   const videoBr = Math.max(Math.round(base * (quality / 100)), 80);
   const estMb   = info ? ((videoBr + audio) * info.duration_secs) / 8 / 1024 : 0;
   const estLow  = estMb * 0.85;
   const estHigh = estMb * 1.15;
   const reduction = info ? Math.round((1 - estMb / info.size_mb) * 100) : 0;
-  const sizeClass =
-    reduction < 0  ? "better" :
-    reduction < 40 ? "good"   :
-    reduction < 70 ? "med"    : "bad";
 
-  // ── Load encoded frame (debounced) ─────────────────────────────────────────
   const loadEncodedFrame = useCallback((idx: number, vbr: number, res: string, f: string) => {
     if (!filePath || !info) return;
     if (encDebounce.current) clearTimeout(encDebounce.current);
@@ -115,11 +99,8 @@ export default function App() {
       const ts = frameTs(idx, info.duration_secs);
       try {
         const result = await invoke<string>("get_encoded_frame", {
-          input: filePath,
-          timestamp: ts,
-          resolution: res,
-          videoBitrateKbps: vbr,
-          fps: f,
+          input: filePath, timestamp: ts, resolution: res,
+          videoBitrateKbps: vbr, fps: f,
         });
         setEncFrames(prev => ({ ...prev, [idx]: result }));
       } catch (e) {
@@ -138,12 +119,9 @@ export default function App() {
 
   useEffect(() => {
     if (screen !== "editor" || !info) return;
-    if (!encFrames[frameIdx]) {
-      loadEncodedFrame(frameIdx, videoBr, resolution, fps);
-    }
+    if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps);
   }, [frameIdx]);
 
-  // ── Load file ──────────────────────────────────────────────────────────────
   const loadFile = useCallback(async (path: string) => {
     setScreen("loading");
     setFilePath(path);
@@ -159,9 +137,7 @@ export default function App() {
       setInfo(videoInfo);
       setOrigFrames(frames);
       setScreen("editor");
-      const b = resolution === "original"
-        ? videoInfo.bitrate_kbps
-        : RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps;
+      const b = resolution === "original" ? videoInfo.bitrate_kbps : (RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps);
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
       loadEncodedFrame(0, vbr, resolution, fps);
     } catch (e) {
@@ -170,7 +146,6 @@ export default function App() {
     }
   }, [resolution, quality, fps]);
 
-  // ── Drag & drop ────────────────────────────────────────────────────────────
   useEffect(() => {
     let off: (() => void) | undefined;
     getCurrentWebview().onDragDropEvent((ev) => {
@@ -186,16 +161,13 @@ export default function App() {
     return () => off?.();
   }, [loadFile]);
 
-  // ── Encode progress events ─────────────────────────────────────────────────
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen<EncodeProgress>("encode-progress", (ev) => {
-      setProgress(ev.payload);
-    }).then(fn => { unlisten = fn; });
+    listen<EncodeProgress>("encode-progress", (ev) => setProgress(ev.payload))
+      .then(fn => { unlisten = fn; });
     return () => unlisten?.();
   }, []);
 
-  // ── Pick file dialog ───────────────────────────────────────────────────────
   const pickFile = async () => {
     const p = await open({
       multiple: false,
@@ -204,92 +176,62 @@ export default function App() {
     if (p) loadFile(p as string);
   };
 
-  const goFrame = (delta: number) => {
-    const next = Math.max(0, Math.min(FRAME_COUNT - 1, frameIdx + delta));
-    setFrameIdx(next);
-  };
+  const goFrame = (delta: number) =>
+    setFrameIdx(i => Math.max(0, Math.min(FRAME_COUNT - 1, i + delta)));
 
-  // ── Encode ─────────────────────────────────────────────────────────────────
-  const runEncode = async (
-    vbr: number, abr: number, res: string, f: string, outPath?: string
-  ) => {
+  const runEncode = async (vbr: number, abr: number, res: string, f: string, outPath?: string) => {
     if (!filePath || !info) return;
-    const out = outPath ?? await save({
-      filters: [{ name: "Output", extensions: [format] }],
-    });
+    const out = outPath ?? await save({ filters: [{ name: "Output", extensions: [format] }] });
     if (!out) return;
     setEncoding(true);
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     try {
       await invoke("encode_video_with_progress", {
         input: filePath, output: out,
-        resolution: res,
-        videoBitrateKbps: vbr,
-        audioBitrateKbps: abr,
-        fps: f,
+        resolution: res, videoBitrateKbps: vbr,
+        audioBitrateKbps: abr, fps: f,
         durationSecs: info.duration_secs,
       });
     } catch (e) {
       setStatus(`❌ ${e}`);
     } finally {
-      setTimeout(() => {
-        setEncoding(false);
-        setProgress(null);
-      }, 1800);
+      setTimeout(() => { setEncoding(false); setProgress(null); }, 1800);
     }
   };
 
-  const handleEncode = () => runEncode(videoBr, audio, resolution, fps);
-
+  const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
   const handleDiscord = async () => {
     if (!info) return;
-    if (info.size_mb <= 10) {
-      setStatus("✅ Already under 10MB — no compression needed!");
-      return;
-    }
+    if (info.size_mb <= 10) { setStatus("✅ Already under 10 MB — no compression needed."); return; }
     const vbr = discordBr(info.duration_secs);
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
-    const out = await save({
-      defaultPath: defaultName,
-      filters: [{ name: "MP4", extensions: ["mp4"] }],
-    });
+    const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
     runEncode(vbr, DISCORD_AUDIO, "original", "original", out);
   };
 
-  // ── Reset ──────────────────────────────────────────────────────────────────
   const reset = () => {
-    setScreen("drop");
-    setFilePath("");
-    setInfo(null);
-    setOrigFrames([]);
-    setEncFrames({});
-    setFrameIdx(0);
-    setStatus("");
-    setProgress(null);
-    setEncoding(false);
+    setScreen("drop"); setFilePath(""); setInfo(null);
+    setOrigFrames([]); setEncFrames({}); setFrameIdx(0);
+    setStatus(""); setProgress(null); setEncoding(false);
   };
 
-  const ql = qualityInfo(quality);
+  const ql          = qualityInfo(quality);
   const currentOrig = origFrames[frameIdx];
   const currentEnc  = encFrames[frameIdx];
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="app">
 
-      {/* ── DROP SCREEN ── */}
+      {/* ── DROP ── */}
       {screen === "drop" && (
-        <div
-          className={`drop-screen${dragOver ? " drag-over" : ""}`}
-          onClick={pickFile}
-        >
-          <div className="drop-logo">
-            <div className="drop-logo-icon">⚡</div>
-            <h1>QuickEncode <span>video compressor</span></h1>
+        <div className={`drop-screen${dragOver ? " drag-over" : ""}`} onClick={pickFile}>
+          <div className="drop-wordmark">
+            <h1>quick encode<em>.</em></h1>
+            <small>video compressor</small>
           </div>
-          <div className="drop-hint">
-            <p>{dragOver ? "Drop to load" : "Drop a video file anywhere"}</p>
+          <div className="drop-hint-text">
+            <p>{dragOver ? "Drop to load" : "Drop a video file anywhere, or"}</p>
             <small>MP4 · MKV · AVI · MOV · WebM · M4V</small>
           </div>
           <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFile(); }}>
@@ -299,20 +241,13 @@ export default function App() {
         </div>
       )}
 
-      {/* ── LOADING SCREEN ── */}
+      {/* ── LOADING ── */}
       {screen === "loading" && (
         <div className="loading-screen">
-          <div className="loading-logo">
-            <div className="loading-logo-icon">⚡</div>
-            <h2>QuickEncode</h2>
-          </div>
+          <div className="loading-wordmark">quick encode<em>.</em></div>
           <div className="loading-bar-wrap">
-            <div className="loading-bar-bg">
-              <div className="loading-bar-fill" />
-            </div>
-            <div className="loading-label">
-              Reading file &amp; extracting frames...
-            </div>
+            <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
+            <div className="loading-label">Reading file &amp; extracting frames…</div>
           </div>
         </div>
       )}
@@ -324,8 +259,7 @@ export default function App() {
           {/* Top bar */}
           <div className="topbar">
             <div className="topbar-left">
-              <div className="topbar-icon">⚡</div>
-              <h1>QuickEncode <span>video compressor</span></h1>
+              <span className="topbar-name">quick encode<em>.</em></span>
             </div>
             <div className="topbar-right">
               <div className="file-chip" onClick={reset}>
@@ -336,118 +270,90 @@ export default function App() {
             </div>
           </div>
 
-          {/* Video info strip */}
-          <div className="video-info-strip">
-            <div className="info-pill">
-              <span className="info-pill-label">Duration</span>
-              <span className="info-pill-val">{fmtTime(info.duration_secs)}</span>
-            </div>
-            <div className="info-pill">
-              <span className="info-pill-label">Size</span>
-              <span className="info-pill-val">{fmtMb(info.size_mb)}</span>
-            </div>
-            <div className="info-pill">
-              <span className="info-pill-label">Resolution</span>
-              <span className="info-pill-val">{info.width}×{info.height}</span>
-            </div>
-            <div className="info-pill">
-              <span className="info-pill-label">Bitrate</span>
-              <span className="info-pill-val">{(info.bitrate_kbps / 1000).toFixed(1)} Mbps</span>
-            </div>
-            <div className="info-pill">
-              <span className="info-pill-label">Aspect</span>
-              <span className="info-pill-val">
-                {(() => {
-                  const g = (a: number, b: number): number => b === 0 ? a : g(b, a % b);
-                  const d = g(info.width, info.height);
-                  return `${info.width/d}:${info.height/d}`;
-                })()}
-              </span>
-            </div>
+          {/* Meta strip — plain text, no pill frames */}
+          <div className="video-meta">
+            {(() => {
+              const d = gcd(info.width, info.height);
+              const items = [
+                { label: "Duration", val: fmtTime(info.duration_secs) },
+                { label: "Size",     val: fmtMb(info.size_mb) },
+                { label: "Res",      val: `${info.width}×${info.height}` },
+                { label: "Bitrate",  val: `${(info.bitrate_kbps/1000).toFixed(1)} Mbps` },
+                { label: "Aspect",   val: `${info.width/d}:${info.height/d}` },
+              ];
+              return items.map(({ label, val }) => (
+                <div key={label} className="meta-item">
+                  <span className="meta-label">{label}</span>
+                  <span className="meta-val">{val}</span>
+                </div>
+              ));
+            })()}
           </div>
 
-          {/* Preview + frame nav — fills all remaining space */}
+          {/* Preview + frame nav */}
           <div className="preview-section" ref={previewRef}>
             <div className="preview-grid">
-              {/* Original */}
               <div
                 className="preview-side"
                 onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}
               >
                 {currentOrig ? (
-                  <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original frame" />
+                  <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original" />
                 ) : (
                   <div className="preview-loading">
-                    <div className="spin" /><span>Loading...</span>
+                    <div className="spin" /><span>Loading</span>
                   </div>
                 )}
                 <span className="preview-tag">Original</span>
                 {currentOrig && (
-                  <button
-                    className="preview-fullscreen-btn"
+                  <button className="preview-fullscreen-btn"
                     onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}
                   >⛶</button>
                 )}
               </div>
 
-              {/* Encoded */}
               <div
                 className="preview-side"
                 onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
               >
                 {encLoading ? (
                   <div className="preview-loading">
-                    <div className="spin" /><span>Rendering...</span>
+                    <div className="spin" /><span>Rendering</span>
                   </div>
                 ) : currentEnc ? (
-                  <img src={`data:image/jpeg;base64,${currentEnc}`} alt="Encoded frame" />
+                  <img src={`data:image/jpeg;base64,${currentEnc}`} alt="Output" />
                 ) : (
                   <div className="preview-loading">
-                    <div className="spin" /><span>Loading...</span>
+                    <div className="spin" /><span>Loading</span>
                   </div>
                 )}
                 <span className="preview-tag">Output</span>
                 {currentEnc && !encLoading && (
-                  <button
-                    className="preview-fullscreen-btn"
+                  <button className="preview-fullscreen-btn"
                     onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}
                   >⛶</button>
                 )}
               </div>
             </div>
 
-            {/* Frame navigation */}
             <div className="frame-nav">
-              <button
-                className="frame-nav-btn"
-                onClick={() => goFrame(-1)}
-                disabled={frameIdx === 0}
-              >‹</button>
-
+              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
               <div className="frame-dots">
                 {Array.from({ length: FRAME_COUNT }, (_, i) => (
-                  <button
-                    key={i}
+                  <button key={i}
                     className={`frame-dot${i === frameIdx ? " active" : ""}`}
                     onClick={() => setFrameIdx(i)}
                   />
                 ))}
               </div>
-
-              <button
-                className="frame-nav-btn"
-                onClick={() => goFrame(1)}
-                disabled={frameIdx === FRAME_COUNT - 1}
-              >›</button>
-
+              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
               <span className="frame-label">
-                Frame {frameIdx + 1} / {FRAME_COUNT}
-                {info && ` · ${fmtTime(frameTs(frameIdx, info.duration_secs))}`}
+                {frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}
               </span>
             </div>
           </div>
 
-          {/* Quality + Settings */}
+          {/* Settings */}
           <div className="settings-row">
             <div className="quality-col">
               <div className="quality-header">
@@ -458,8 +364,7 @@ export default function App() {
                   <span className="q-est">≈ {fmtMb(estLow)}–{fmtMb(estHigh)}</span>
                 </div>
               </div>
-              <input
-                type="range" min={5} max={100} value={quality}
+              <input type="range" min={5} max={100} value={quality}
                 style={{ background: sliderBg(quality, 5, 100) }}
                 onChange={e => setQuality(Number(e.target.value))}
               />
@@ -512,7 +417,7 @@ export default function App() {
 
           {/* Bottom bar */}
           <div className="bottom-bar">
-            <div className={`size-box ${sizeClass}`}>
+            <div className="size-box">
               <span className="size-lbl">Estimated output</span>
               <div className="size-right">
                 <span className="size-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
@@ -524,20 +429,17 @@ export default function App() {
               </div>
             </div>
 
-            <button
-              className="preset-btn"
-              onClick={handleDiscord}
-              disabled={encoding}
-              title={`Targets ${DISCORD_TARGET}MB — ${discordBr(info.duration_secs)}kbps video, ${DISCORD_AUDIO}kbps audio`}
+            <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
+              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}
             >
               <span className="preset-icon">🎮</span>
               Discord Ready
-              <span className="preset-size">≤10MB</span>
+              <span className="preset-size">≤10 MB</span>
             </button>
 
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
               {encoding
-                ? <span className="btn-inner"><div className="spin" />Encoding...</span>
+                ? <span className="btn-inner"><div className="spin" />Encoding…</span>
                 : "Start Encode"}
             </button>
           </div>
@@ -550,18 +452,13 @@ export default function App() {
       {encoding && progress && (
         <div className="progress-overlay">
           <div className="progress-card">
-            <div className="progress-icon">
-              {progress.percent >= 100 ? "✅" : "⚙️"}
-            </div>
             <div className="progress-title">
-              {progress.percent >= 100 ? "Encoding complete!" : "Encoding video..."}
+              {progress.percent >= 100 ? "Done" : "Encoding…"}
             </div>
             <div className="progress-pass">
-              {progress.percent < 50
-                ? "Pass 1 / 2 — Analyzing"
-                : progress.percent < 100
-                  ? "Pass 2 / 2 — Encoding"
-                  : "Finalizing..."}
+              {progress.percent < 50 ? "Pass 1 / 2 — Analyzing"
+                : progress.percent < 100 ? "Pass 2 / 2 — Encoding"
+                : "Finalizing"}
             </div>
             <div className="progress-bar-wrap">
               <div className="progress-bar-bg">
@@ -574,10 +471,10 @@ export default function App() {
                 <span className="progress-pct">{Math.round(progress.percent)}%</span>
                 <span>
                   {progress.percent >= 100
-                    ? <span className="progress-done-msg">Done!</span>
+                    ? <span className="progress-done-msg">Complete</span>
                     : progress.percent >= 50 && progress.eta_secs > 0
                       ? `ETA ${fmtEta(progress.eta_secs)}`
-                      : "Calculating..."}
+                      : "Calculating…"}
                 </span>
               </div>
             </div>
@@ -585,19 +482,15 @@ export default function App() {
         </div>
       )}
 
-      {/* ── FULLSCREEN MODAL ── */}
+      {/* ── FULLSCREEN ── */}
       {fsImage && (
         <div className="fullscreen-overlay" onClick={() => setFsImage(null)}>
           <span className="fullscreen-label">{fsImage.label}</span>
-          <img
-            src={`data:image/jpeg;base64,${fsImage.src}`}
-            alt={fsImage.label}
-            onClick={e => e.stopPropagation()}
-          />
+          <img src={`data:image/jpeg;base64,${fsImage.src}`} alt={fsImage.label}
+            onClick={e => e.stopPropagation()} />
           <div className="fullscreen-close" onClick={() => setFsImage(null)}>✕</div>
         </div>
       )}
-
     </div>
   );
 }

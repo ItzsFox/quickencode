@@ -12,10 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "quickencode",
-        "width": 860,
-        "height": 700,
-        "resizable": false
+        "title": "quick encode.",
+        "width": 900,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 540,
+        "resizable": true
       }
     ],
     "security": {
