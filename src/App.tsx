@@ -6,15 +6,20 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 interface VideoInfo {
   duration_secs: number;
-  size_mb: number;
-  bitrate_kbps: number;
-  width: number;
-  height: number;
+  size_mb:       number;
+  bitrate_kbps:  number;
+  width:         number;
+  height:        number;
 }
 interface EncodeProgress {
-  percent: number;
+  percent:  number;
   eta_secs: number;
-  pass: number;
+  pass:     number;
+}
+interface BatchFile {
+  path:   string;
+  status: "pending" | "active" | "done" | "error";
+  msg?:   string;
 }
 
 const FRAME_COUNT    = 10;
@@ -23,10 +28,11 @@ const DISCORD_AUDIO  = 96;
 const RES_BITRATES: Record<string, number> = {
   "1080p": 5000, "720p": 2500, "480p": 1000,
 };
+const THEME_KEY = "qe_theme";
 
 function fmtTime(s: number) {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
+  const h   = Math.floor(s / 3600);
+  const m   = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
   return h > 0
     ? `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`
@@ -40,9 +46,9 @@ function fmtEta(s: number) {
   if (s < 60) return `${Math.ceil(s)}s`;
   return `${Math.floor(s/60)}m ${Math.ceil(s%60)}s`;
 }
-function sliderBg(val: number, min: number, max: number) {
+function sliderBg(val: number, min: number, max: number, fill: string, empty: string) {
   const pct = ((val - min) / (max - min)) * 100;
-  return `linear-gradient(to right, #6b6b72 ${pct}%, #26262a ${pct}%)`;
+  return `linear-gradient(to right, ${fill} ${pct}%, ${empty} ${pct}%)`;
 }
 function qualityInfo(q: number) {
   if (q >= 85) return { label: "Near Lossless", cls: "c4" };
@@ -59,10 +65,31 @@ function frameTs(i: number, duration: number) {
   return duration * (i + 0.5) / FRAME_COUNT;
 }
 function gcd(a: number, b: number): number { return b === 0 ? a : gcd(b, a % b); }
+function ext(p: string) { return p.split(".").pop()?.toLowerCase() ?? "mp4"; }
 
-type Screen = "drop" | "loading" | "editor";
+type Screen = "drop" | "loading" | "editor" | "batch";
 
 export default function App() {
+  // ── Theme (persisted via Tauri store or localStorage fallback) ──
+  const initTheme = (): "light" | "dark" => {
+    try { return (localStorage.getItem(THEME_KEY) as "light" | "dark") ?? "light"; }
+    catch { return "light"; }
+  };
+  const [theme, setThemeState] = useState<"light" | "dark">(initTheme);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+  }, [theme]);
+
+  // Apply on first render synchronously
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, []);
+
+  const toggleTheme = () => setThemeState(t => t === "light" ? "dark" : "light");
+
+  // ── Core state ──
   const [screen, setScreen]         = useState<Screen>("drop");
   const [filePath, setFilePath]     = useState("");
   const [info, setInfo]             = useState<VideoInfo | null>(null);
@@ -81,7 +108,11 @@ export default function App() {
   const [fsImage, setFsImage]       = useState<{src: string; label: string} | null>(null);
   const [status, setStatus]         = useState("");
 
-  const previewRef  = useRef<HTMLDivElement>(null);
+  // ── Batch state ──
+  const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
+  const [batchProgress, setBatchProgress] = useState<{idx: number; enc: EncodeProgress} | null>(null);
+  const [batchRunning, setBatchRunning]   = useState(false);
+
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const base    = resolution === "original" ? (info?.bitrate_kbps ?? 5000) : RES_BITRATES[resolution];
@@ -91,6 +122,7 @@ export default function App() {
   const estHigh = estMb * 1.15;
   const reduction = info ? Math.round((1 - estMb / info.size_mb) * 100) : 0;
 
+  // ── Encoded frame preview ──
   const loadEncodedFrame = useCallback((idx: number, vbr: number, res: string, f: string) => {
     if (!filePath || !info) return;
     if (encDebounce.current) clearTimeout(encDebounce.current);
@@ -104,7 +136,7 @@ export default function App() {
         });
         setEncFrames(prev => ({ ...prev, [idx]: result }));
       } catch (e) {
-        setStatus(`⚠️ Preview failed: ${e}`);
+        setStatus(`Preview failed: ${e}`);
       } finally {
         setEncLoading(false);
       }
@@ -122,6 +154,7 @@ export default function App() {
     if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps);
   }, [frameIdx]);
 
+  // ── Load single file ──
   const loadFile = useCallback(async (path: string) => {
     setScreen("loading");
     setFilePath(path);
@@ -146,6 +179,7 @@ export default function App() {
     }
   }, [resolution, quality, fps]);
 
+  // ── Drag & drop ──
   useEffect(() => {
     let off: (() => void) | undefined;
     getCurrentWebview().onDragDropEvent((ev) => {
@@ -155,19 +189,29 @@ export default function App() {
       if (t === "drop") {
         setDragOver(false);
         const paths = (ev.payload as any).paths as string[];
-        if (paths?.[0]) loadFile(paths[0]);
+        if (!paths?.length) return;
+        if (paths.length === 1) {
+          loadFile(paths[0]);
+        } else {
+          setBatchFiles(paths.map(p => ({ path: p, status: "pending" })));
+          setScreen("batch");
+        }
       }
     }).then(fn => { off = fn; });
     return () => off?.();
   }, [loadFile]);
 
+  // ── Progress listener ──
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen<EncodeProgress>("encode-progress", (ev) => setProgress(ev.payload))
-      .then(fn => { unlisten = fn; });
+    listen<EncodeProgress>("encode-progress", (ev) => {
+      setProgress(ev.payload);
+      if (batchRunning) setBatchProgress(prev => prev ? { ...prev, enc: ev.payload } : null);
+    }).then(fn => { unlisten = fn; });
     return () => unlisten?.();
-  }, []);
+  }, [batchRunning]);
 
+  // ── Pick single file ──
   const pickFile = async () => {
     const p = await open({
       multiple: false,
@@ -176,9 +220,22 @@ export default function App() {
     if (p) loadFile(p as string);
   };
 
+  // ── Pick multiple files ──
+  const pickMultiple = async () => {
+    const paths = await open({
+      multiple: true,
+      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v"] }],
+    }) as string[] | null;
+    if (!paths?.length) return;
+    if (paths.length === 1) { loadFile(paths[0]); return; }
+    setBatchFiles(paths.map(p => ({ path: p, status: "pending" })));
+    setScreen("batch");
+  };
+
   const goFrame = (delta: number) =>
     setFrameIdx(i => Math.max(0, Math.min(FRAME_COUNT - 1, i + delta)));
 
+  // ── Single encode ──
   const runEncode = async (vbr: number, abr: number, res: string, f: string, outPath?: string) => {
     if (!filePath || !info) return;
     const out = outPath ?? await save({ filters: [{ name: "Output", extensions: [format] }] });
@@ -210,15 +267,80 @@ export default function App() {
     runEncode(vbr, DISCORD_AUDIO, "original", "original", out);
   };
 
+  // ── Batch encode ──
+  const runBatch = async (outputDir: string) => {
+    setBatchRunning(true);
+    for (let i = 0; i < batchFiles.length; i++) {
+      const file = batchFiles[i];
+      setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "active" } : f));
+      setBatchProgress({ idx: i, enc: { percent: 0, eta_secs: 0, pass: 1 } });
+      const inName  = basename(file.path).replace(/\.[^.]+$/, "");
+      const outFile = `${outputDir}/${inName}_encoded.${format}`;
+      try {
+        const infoRaw = await invoke<VideoInfo>("get_video_info", { input: file.path });
+        const b   = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
+        const vbr = Math.max(Math.round(b * (quality / 100)), 80);
+        await invoke("encode_video_with_progress", {
+          input: file.path, output: outFile,
+          resolution, videoBitrateKbps: vbr,
+          audioBitrateKbps: audio, fps,
+          durationSecs: infoRaw.duration_secs,
+        });
+        setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "done" } : f));
+      } catch (e) {
+        setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "error", msg: String(e) } : f));
+      }
+    }
+    setBatchRunning(false);
+    setBatchProgress(null);
+  };
+
+  const startBatch = async () => {
+    const dir = await open({ directory: true, multiple: false }) as string | null;
+    if (!dir) return;
+    runBatch(dir);
+  };
+
+  const removeBatchFile = (idx: number) =>
+    setBatchFiles(prev => prev.filter((_, i) => i !== idx));
+
+  const addMoreFiles = async () => {
+    const paths = await open({
+      multiple: true,
+      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v"] }],
+    }) as string[] | null;
+    if (!paths?.length) return;
+    setBatchFiles(prev => [...prev, ...paths.map(p => ({ path: p, status: "pending" as const }))]);
+  };
+
   const reset = () => {
     setScreen("drop"); setFilePath(""); setInfo(null);
     setOrigFrames([]); setEncFrames({}); setFrameIdx(0);
     setStatus(""); setProgress(null); setEncoding(false);
+    setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
   };
 
   const ql          = qualityInfo(quality);
   const currentOrig = origFrames[frameIdx];
   const currentEnc  = encFrames[frameIdx];
+
+  // ── Slider background (reads CSS variables at runtime) ──
+  const slBg = (val: number, min: number, max: number) => {
+    const isDark = theme === "dark";
+    return sliderBg(val, min, max,
+      isDark ? "#888888" : "#555555",
+      isDark ? "#333336" : "#d0d0d0"
+    );
+  };
+
+  const ThemeBtn = () => (
+    <button className="theme-toggle" onClick={toggleTheme}
+      title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+      aria-label="Toggle theme"
+    >
+      {theme === "light" ? "☾" : "☀"}
+    </button>
+  );
 
   return (
     <div className="app">
@@ -231,13 +353,19 @@ export default function App() {
             <small>video compressor</small>
           </div>
           <div className="drop-hint-text">
-            <p>{dragOver ? "Drop to load" : "Drop a video file anywhere, or"}</p>
-            <small>MP4 · MKV · AVI · MOV · WebM · M4V</small>
+            <p>{dragOver ? "Drop to load" : "Drop files here, or"}</p>
+            <small>MP4 · MKV · AVI · MOV · WebM · M4V · drag multiple for batch</small>
           </div>
-          <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFile(); }}>
-            Browse files
-          </button>
+          <div className="drop-actions">
+            <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFile(); }}>
+              Browse file
+            </button>
+            <button className="drop-browse secondary" onClick={e => { e.stopPropagation(); pickMultiple(); }}>
+              Batch import
+            </button>
+          </div>
           {status && <div className="status-bar">{status}</div>}
+          <ThemeBtn />
         </div>
       )}
 
@@ -248,6 +376,125 @@ export default function App() {
           <div className="loading-bar-wrap">
             <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
             <div className="loading-label">Reading file &amp; extracting frames…</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── BATCH SCREEN ── */}
+      {screen === "batch" && (
+        <div className="batch-screen">
+          <div className="batch-topbar">
+            <span className="batch-title">quick encode<em>.</em></span>
+            <div className="batch-topbar-right">
+              <span className="batch-count">{batchFiles.length} file{batchFiles.length !== 1 ? "s" : ""}</span>
+              <ThemeBtn />
+              <button className="file-chip" onClick={reset}>
+                <span>Clear all</span>
+                <span className="file-chip-x">✕</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="batch-file-list">
+            {batchFiles.map((f, i) => (
+              <div key={f.path} className="batch-file-row">
+                <span className="batch-file-icon">▶</span>
+                <span className="batch-file-name" title={f.path}>{basename(f.path)}</span>
+                <span className={`batch-file-status ${f.status}`}>
+                  {f.status === "pending" ? "Pending"
+                    : f.status === "active" ? "Encoding…"
+                    : f.status === "done"   ? "✓ Done"
+                    : `✕ Error`}
+                </span>
+                {!batchRunning && f.status !== "active" && (
+                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>✕</button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="batch-bottom">
+            {/* Batch uses same settings row */}
+            <div className="batch-settings-row settings-row">
+              <div className="quality-col">
+                <div className="quality-header">
+                  <span className="section-label">Quality</span>
+                  <div className="quality-values">
+                    <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
+                    <span className="q-pct">{quality}%</span>
+                  </div>
+                </div>
+                <input type="range" min={5} max={100} value={quality}
+                  style={{ background: slBg(quality, 5, 100) }}
+                  onChange={e => setQuality(Number(e.target.value))}
+                />
+                <div className="range-labels"><span>Smallest</span><span>Best</span></div>
+              </div>
+              <div className="settings-divider" />
+              <div className="options-col">
+                <span className="section-label">Settings</span>
+                <div className="options-grid">
+                  <div className="setting">
+                    <label>Resolution</label>
+                    <select value={resolution} onChange={e => setRes(e.target.value)}>
+                      <option value="original">Original</option>
+                      <option value="1080p">1080p</option>
+                      <option value="720p">720p</option>
+                      <option value="480p">480p</option>
+                    </select>
+                  </div>
+                  <div className="setting">
+                    <label>Format</label>
+                    <select value={format} onChange={e => setFmt(e.target.value)}>
+                      <option value="mp4">MP4</option>
+                      <option value="mkv">MKV</option>
+                      <option value="webm">WebM</option>
+                    </select>
+                  </div>
+                  <div className="setting">
+                    <label>Audio</label>
+                    <select value={audio} onChange={e => setAudio(Number(e.target.value))}>
+                      <option value={64}>64 kbps</option>
+                      <option value={128}>128 kbps</option>
+                      <option value={192}>192 kbps</option>
+                      <option value={256}>256 kbps</option>
+                    </select>
+                  </div>
+                  <div className="setting">
+                    <label>FPS</label>
+                    <select value={fps} onChange={e => setFps(e.target.value)}>
+                      <option value="original">Original</option>
+                      <option value="60">60 fps</option>
+                      <option value="30">30 fps</option>
+                      <option value="24">24 fps</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="batch-actions">
+              <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>
+                + Add more
+              </button>
+              <div style={{ flex: 1 }} />
+              {batchProgress && (
+                <span className="batch-count">
+                  {batchProgress.idx + 1}/{batchFiles.length} · {Math.round(batchProgress.enc.percent)}%
+                </span>
+              )}
+              <button className="preset-btn" onClick={handleDiscord} disabled={true}
+                title="Discord export not available in batch mode">
+                <span className="preset-icon">🎮</span>
+                Discord Ready
+              </button>
+              <button className="btn-encode" onClick={startBatch} disabled={batchRunning}>
+                {batchRunning
+                  ? <span className="btn-inner"><div className="spin" />Encoding…</span>
+                  : `Encode All (${batchFiles.length})`}
+              </button>
+            </div>
+            <div className="status-bar">{status}</div>
           </div>
         </div>
       )}
@@ -266,11 +513,12 @@ export default function App() {
                 <span>{basename(filePath)}</span>
                 <span className="file-chip-x">✕</span>
               </div>
+              <ThemeBtn />
               <span className="version-badge">v2.0</span>
             </div>
           </div>
 
-          {/* Meta strip — plain text, no pill frames */}
+          {/* Meta strip */}
           <div className="video-meta">
             {(() => {
               const d = gcd(info.width, info.height);
@@ -290,8 +538,8 @@ export default function App() {
             })()}
           </div>
 
-          {/* Preview + frame nav */}
-          <div className="preview-section" ref={previewRef}>
+          {/* Preview */}
+          <div className="preview-section">
             <div className="preview-grid">
               <div
                 className="preview-side"
@@ -300,9 +548,7 @@ export default function App() {
                 {currentOrig ? (
                   <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original" />
                 ) : (
-                  <div className="preview-loading">
-                    <div className="spin" /><span>Loading</span>
-                  </div>
+                  <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
                 )}
                 <span className="preview-tag">Original</span>
                 {currentOrig && (
@@ -317,15 +563,11 @@ export default function App() {
                 onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
               >
                 {encLoading ? (
-                  <div className="preview-loading">
-                    <div className="spin" /><span>Rendering</span>
-                  </div>
+                  <div className="preview-loading"><div className="spin" /><span>Rendering</span></div>
                 ) : currentEnc ? (
                   <img src={`data:image/jpeg;base64,${currentEnc}`} alt="Output" />
                 ) : (
-                  <div className="preview-loading">
-                    <div className="spin" /><span>Loading</span>
-                  </div>
+                  <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
                 )}
                 <span className="preview-tag">Output</span>
                 {currentEnc && !encLoading && (
@@ -365,14 +607,12 @@ export default function App() {
                 </div>
               </div>
               <input type="range" min={5} max={100} value={quality}
-                style={{ background: sliderBg(quality, 5, 100) }}
+                style={{ background: slBg(quality, 5, 100) }}
                 onChange={e => setQuality(Number(e.target.value))}
               />
               <div className="range-labels"><span>Smallest</span><span>Best</span></div>
             </div>
-
             <div className="settings-divider" />
-
             <div className="options-col">
               <span className="section-label">Settings</span>
               <div className="options-grid">
@@ -417,16 +657,11 @@ export default function App() {
 
           {/* Bottom bar */}
           <div className="bottom-bar">
-            <div className="size-box">
-              <span className="size-lbl">Estimated output</span>
-              <div className="size-right">
-                <span className="size-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
-                {reduction !== 0 && (
-                  <span className="size-diff">
-                    {reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}
-                  </span>
-                )}
-              </div>
+            <div className="est-inline">
+              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
+              {reduction !== 0 && (
+                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
+              )}
             </div>
 
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
