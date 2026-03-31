@@ -69,6 +69,44 @@ pub fn scan_folder_for_videos(folder: String) -> Vec<String> {
     videos
 }
 
+/// Returns the file size in MB for a given path.
+#[tauri::command]
+pub fn get_file_size_mb(path: String) -> Result<f64, String> {
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("Could not read file metadata: {e}"))?;
+    Ok(meta.len() as f64 / (1024.0 * 1024.0))
+}
+
+/// Opens the file's parent folder in the system file explorer and selects the file.
+#[tauri::command]
+pub fn show_in_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // xdg-open the parent directory — no file-select equivalent on Linux
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct VideoInfo {
     pub duration_secs: f64,
