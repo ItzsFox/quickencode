@@ -4,48 +4,69 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use tauri::{Emitter, Manager};
 
 /// Resolve a sidecar binary using Tauri's proper resource resolution.
-///
-/// In dev mode: looks in `src-tauri/binaries/<name>-<target-triple>.exe`
-/// In release: uses Tauri's resource_dir, which is where externalBin
-/// binaries are correctly placed by the bundler.
 pub fn resolve_bin(app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
-    // Build the target-triple-suffixed filename that Tauri's sidecar bundler uses.
-    // The triple is baked in at compile time via the TAURI_TARGET_TRIPLE env var
-    // (set automatically by `tauri build`), or we fall back to the host triple.
     let triple = option_env!("TAURI_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
     let filename = format!("{name}-{triple}.exe");
 
-    // Dev: binaries live next to Cargo.toml
     #[cfg(debug_assertions)]
     {
         let bin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(&filename);
-        if bin.exists() {
-            return Ok(bin);
-        }
+        if bin.exists() { return Ok(bin); }
         return Err(format!("[dev] Binary not found at: {}", bin.display()));
     }
 
-    // Release: Tauri bundles sidecars into the resource directory.
-    // resource_dir() is the canonical location — do NOT use current_exe().parent().
     #[cfg(not(debug_assertions))]
     {
         let resource_dir = app
             .path()
             .resource_dir()
             .map_err(|e| format!("Could not resolve resource_dir: {e}"))?;
-
         let bin = resource_dir.join(&filename);
-        if bin.exists() {
-            return Ok(bin);
-        }
+        if bin.exists() { return Ok(bin); }
         Err(format!(
             "[release] Binary not found at: {}\nMake sure '{}' is listed under bundle.externalBin in tauri.conf.json",
-            bin.display(),
-            name
+            bin.display(), name
         ))
     }
+}
+
+/// Video file extensions we recognize.
+const VIDEO_EXTS: &[&str] = &["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"];
+
+fn is_video(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| VIDEO_EXTS.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// Scan a folder (non-recursive) for video files.
+/// Returns an empty Vec (not an error) when the path isn't a directory or contains no videos.
+#[tauri::command]
+pub fn scan_folder_for_videos(folder: String) -> Vec<String> {
+    let p = std::path::Path::new(&folder);
+    if !p.is_dir() { return vec![]; }
+
+    let mut videos: Vec<String> = std::fs::read_dir(p)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| {
+                    let ep = e.path();
+                    if ep.is_file() && is_video(&ep) {
+                        ep.to_str().map(|s| s.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    videos.sort();
+    videos
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -126,7 +147,6 @@ pub async fn get_video_frames(
             .ok_or("no duration")?;
 
         let mut frames: Vec<String> = Vec::with_capacity(count);
-
         for i in 0..count {
             let ts     = duration * (i as f64 + 0.5) / count as f64;
             let ts_str = format!("{:.3}", ts);
@@ -142,7 +162,6 @@ pub async fn get_video_frames(
                 .map_err(|e| format!("Frame {} read error: {}", i, e))?;
             frames.push(STANDARD.encode(bytes));
         }
-
         Ok(frames)
     })
     .await
@@ -251,7 +270,6 @@ pub async fn encode_video_with_progress(
             "-passlogfile".into(), passlog_str.clone(),
             "-an".into(), "-f".into(), "null".into(), "NUL".into(),
         ]);
-
         let s1 = Command::new(&ffmpeg).args(&pass1)
             .stderr(Stdio::null())
             .status().map_err(|e| e.to_string())?;
@@ -314,11 +332,9 @@ pub async fn encode_video_with_progress(
         }
 
         child.wait().map_err(|e| e.to_string())?;
-
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 100.0, eta_secs: 0.0, pass: 2,
         });
-
         Ok("Done".into())
     })
     .await

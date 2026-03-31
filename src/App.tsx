@@ -25,6 +25,7 @@ interface BatchFile {
 const FRAME_COUNT    = 10;
 const DISCORD_TARGET = 9;
 const DISCORD_AUDIO  = 96;
+const VIDEO_EXTS     = new Set(["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"]);
 const RES_BITRATES: Record<string, number> = {
   "1080p": 5000, "720p": 2500, "480p": 1000,
 };
@@ -42,7 +43,7 @@ function fmtMb(mb: number) {
   return mb >= 1024 ? `${(mb/1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
 }
 function fmtEta(s: number) {
-  if (s <= 0) return "—";
+  if (s <= 0) return "\u2014";
   if (s < 60) return `${Math.ceil(s)}s`;
   return `${Math.floor(s/60)}m ${Math.ceil(s%60)}s`;
 }
@@ -65,12 +66,21 @@ function frameTs(i: number, duration: number) {
   return duration * (i + 0.5) / FRAME_COUNT;
 }
 function gcd(a: number, b: number): number { return b === 0 ? a : gcd(b, a % b); }
-function ext(p: string) { return p.split(".").pop()?.toLowerCase() ?? "mp4"; }
+function isVideo(p: string) {
+  return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
+}
+
+// Discord icon SVG — uses currentColor so it flips with theme
+const DiscordIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057.1 18.08.114 18.1.131 18.111a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+  </svg>
+);
 
 type Screen = "drop" | "loading" | "editor" | "batch";
 
 export default function App() {
-  // ── Theme (persisted via Tauri store or localStorage fallback) ──
+  // ── Theme ──
   const initTheme = (): "light" | "dark" => {
     try { return (localStorage.getItem(THEME_KEY) as "light" | "dark") ?? "light"; }
     catch { return "light"; }
@@ -81,13 +91,12 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem(THEME_KEY, theme); } catch {}
   }, [theme]);
+  useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, []);
 
-  // Apply on first render synchronously
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  }, []);
-
-  const toggleTheme = () => setThemeState(t => t === "light" ? "dark" : "light");
+  const toggleTheme = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setThemeState(t => t === "light" ? "dark" : "light");
+  };
 
   // ── Core state ──
   const [screen, setScreen]         = useState<Screen>("drop");
@@ -109,9 +118,10 @@ export default function App() {
   const [status, setStatus]         = useState("");
 
   // ── Batch state ──
-  const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
-  const [batchProgress, setBatchProgress] = useState<{idx: number; enc: EncodeProgress} | null>(null);
-  const [batchRunning, setBatchRunning]   = useState(false);
+  const [batchFiles, setBatchFiles]           = useState<BatchFile[]>([]);
+  const [batchProgress, setBatchProgress]     = useState<{idx: number; enc: EncodeProgress} | null>(null);
+  const [batchRunning, setBatchRunning]       = useState(false);
+  const [batchDiscordMode, setBatchDiscordMode] = useState(false);
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -174,32 +184,56 @@ export default function App() {
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
       loadEncodedFrame(0, vbr, resolution, fps);
     } catch (e) {
-      setStatus(`❌ ${e}`);
+      setStatus(`\u274C ${e}`);
       setScreen("drop");
     }
   }, [resolution, quality, fps]);
 
+  // ── Resolve dropped paths — handle folders by scanning for video files ──
+  const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
+    const videos: string[] = [];
+    for (const p of paths) {
+      if (isVideo(p)) {
+        videos.push(p);
+      } else {
+        // Attempt to treat as folder — ask Rust to scan it
+        try {
+          const found = await invoke<string[]>("scan_folder_for_videos", { folder: p });
+          videos.push(...found);
+        } catch {
+          // Not a folder or scan failed — skip silently
+        }
+      }
+    }
+    return videos;
+  }, []);
+
   // ── Drag & drop ──
   useEffect(() => {
     let off: (() => void) | undefined;
-    getCurrentWebview().onDragDropEvent((ev) => {
+    getCurrentWebview().onDragDropEvent(async (ev) => {
       const t = ev.payload.type;
       if (t === "over")  setDragOver(true);
       if (t === "leave") setDragOver(false);
       if (t === "drop") {
         setDragOver(false);
-        const paths = (ev.payload as any).paths as string[];
-        if (!paths?.length) return;
-        if (paths.length === 1) {
-          loadFile(paths[0]);
+        const raw = (ev.payload as any).paths as string[];
+        if (!raw?.length) return;
+        const resolved = await resolveDroppedPaths(raw);
+        if (!resolved.length) {
+          setStatus("No video files found in dropped items.");
+          return;
+        }
+        if (resolved.length === 1) {
+          loadFile(resolved[0]);
         } else {
-          setBatchFiles(paths.map(p => ({ path: p, status: "pending" })));
+          setBatchFiles(resolved.map(p => ({ path: p, status: "pending" })));
           setScreen("batch");
         }
       }
     }).then(fn => { off = fn; });
     return () => off?.();
-  }, [loadFile]);
+  }, [loadFile, resolveDroppedPaths]);
 
   // ── Progress listener ──
   useEffect(() => {
@@ -211,22 +245,15 @@ export default function App() {
     return () => unlisten?.();
   }, [batchRunning]);
 
-  // ── Pick single file ──
-  const pickFile = async () => {
-    const p = await open({
-      multiple: false,
-      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v"] }],
-    });
-    if (p) loadFile(p as string);
-  };
-
-  // ── Pick multiple files ──
-  const pickMultiple = async () => {
-    const paths = await open({
+  // ── Pick files (single or multi — one button) ──
+  const pickFiles = async () => {
+    const result = await open({
       multiple: true,
-      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v"] }],
-    }) as string[] | null;
-    if (!paths?.length) return;
+      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"] }],
+    }) as string[] | string | null;
+    if (!result) return;
+    const paths = Array.isArray(result) ? result : [result];
+    if (paths.length === 0) return;
     if (paths.length === 1) { loadFile(paths[0]); return; }
     setBatchFiles(paths.map(p => ({ path: p, status: "pending" })));
     setScreen("batch");
@@ -250,7 +277,7 @@ export default function App() {
         durationSecs: info.duration_secs,
       });
     } catch (e) {
-      setStatus(`❌ ${e}`);
+      setStatus(`\u274C ${e}`);
     } finally {
       setTimeout(() => { setEncoding(false); setProgress(null); }, 1800);
     }
@@ -259,7 +286,7 @@ export default function App() {
   const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
   const handleDiscord = async () => {
     if (!info) return;
-    if (info.size_mb <= 10) { setStatus("✅ Already under 10 MB — no compression needed."); return; }
+    if (info.size_mb <= 10) { setStatus("\u2705 Already under 10 MB \u2014 no compression needed."); return; }
     const vbr = discordBr(info.duration_secs);
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
@@ -268,22 +295,37 @@ export default function App() {
   };
 
   // ── Batch encode ──
-  const runBatch = async (outputDir: string) => {
+  const runBatch = async (outputDir: string, discordMode: boolean) => {
     setBatchRunning(true);
     for (let i = 0; i < batchFiles.length; i++) {
       const file = batchFiles[i];
       setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "active" } : f));
       setBatchProgress({ idx: i, enc: { percent: 0, eta_secs: 0, pass: 1 } });
       const inName  = basename(file.path).replace(/\.[^.]+$/, "");
-      const outFile = `${outputDir}/${inName}_encoded.${format}`;
+      const suffix  = discordMode ? "_discord" : "_encoded";
+      const outFile = `${outputDir}/${inName}${suffix}.mp4`;
       try {
         const infoRaw = await invoke<VideoInfo>("get_video_info", { input: file.path });
-        const b   = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
-        const vbr = Math.max(Math.round(b * (quality / 100)), 80);
+        let vbr: number;
+        let abr: number;
+        let res: string;
+        let f: string;
+        if (discordMode) {
+          vbr = discordBr(infoRaw.duration_secs);
+          abr = DISCORD_AUDIO;
+          res = "original";
+          f   = "original";
+        } else {
+          const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
+          vbr = Math.max(Math.round(b * (quality / 100)), 80);
+          abr = audio;
+          res = resolution;
+          f   = fps;
+        }
         await invoke("encode_video_with_progress", {
           input: file.path, output: outFile,
-          resolution, videoBitrateKbps: vbr,
-          audioBitrateKbps: audio, fps,
+          resolution: res, videoBitrateKbps: vbr,
+          audioBitrateKbps: abr, fps: f,
           durationSecs: infoRaw.duration_secs,
         });
         setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "done" } : f));
@@ -295,22 +337,23 @@ export default function App() {
     setBatchProgress(null);
   };
 
-  const startBatch = async () => {
+  const startBatch = async (discordMode = false) => {
     const dir = await open({ directory: true, multiple: false }) as string | null;
     if (!dir) return;
-    runBatch(dir);
+    setBatchDiscordMode(discordMode);
+    runBatch(dir, discordMode);
   };
 
   const removeBatchFile = (idx: number) =>
     setBatchFiles(prev => prev.filter((_, i) => i !== idx));
 
   const addMoreFiles = async () => {
-    const paths = await open({
+    const result = await open({
       multiple: true,
-      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v"] }],
+      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"] }],
     }) as string[] | null;
-    if (!paths?.length) return;
-    setBatchFiles(prev => [...prev, ...paths.map(p => ({ path: p, status: "pending" as const }))]);
+    if (!result?.length) return;
+    setBatchFiles(prev => [...prev, ...result.map(p => ({ path: p, status: "pending" as const }))]);
   };
 
   const reset = () => {
@@ -318,13 +361,13 @@ export default function App() {
     setOrigFrames([]); setEncFrames({}); setFrameIdx(0);
     setStatus(""); setProgress(null); setEncoding(false);
     setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
+    setBatchDiscordMode(false);
   };
 
   const ql          = qualityInfo(quality);
   const currentOrig = origFrames[frameIdx];
   const currentEnc  = encFrames[frameIdx];
 
-  // ── Slider background (reads CSS variables at runtime) ──
   const slBg = (val: number, min: number, max: number) => {
     const isDark = theme === "dark";
     return sliderBg(val, min, max,
@@ -333,12 +376,13 @@ export default function App() {
     );
   };
 
+  // Theme toggle — stopPropagation so drop screen click doesn't fire
   const ThemeBtn = () => (
     <button className="theme-toggle" onClick={toggleTheme}
       title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
       aria-label="Toggle theme"
     >
-      {theme === "light" ? "☾" : "☀"}
+      {theme === "light" ? "\u263E" : "\u2600"}
     </button>
   );
 
@@ -347,25 +391,29 @@ export default function App() {
 
       {/* ── DROP ── */}
       {screen === "drop" && (
-        <div className={`drop-screen${dragOver ? " drag-over" : ""}`} onClick={pickFile}>
+        <div
+          className={`drop-screen${dragOver ? " drag-over" : ""}`}
+          onClick={pickFiles}
+        >
+          {/* Theme toggle sits in corner, stopPropagation prevents opening file picker */}
+          <div className="drop-theme-btn">
+            <ThemeBtn />
+          </div>
+
           <div className="drop-wordmark">
             <h1>quick encode<em>.</em></h1>
             <small>video compressor</small>
           </div>
           <div className="drop-hint-text">
-            <p>{dragOver ? "Drop to load" : "Drop files here, or"}</p>
-            <small>MP4 · MKV · AVI · MOV · WebM · M4V · drag multiple for batch</small>
+            <p>{dragOver ? "Drop to load" : "Drop files or folders here, or"}</p>
+            <small>MP4 \u00B7 MKV \u00B7 AVI \u00B7 MOV \u00B7 WebM \u00B7 M4V \u00B7 select multiple for batch</small>
           </div>
           <div className="drop-actions">
-            <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFile(); }}>
-              Browse file
-            </button>
-            <button className="drop-browse secondary" onClick={e => { e.stopPropagation(); pickMultiple(); }}>
-              Batch import
+            <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFiles(); }}>
+              Browse files
             </button>
           </div>
           {status && <div className="status-bar">{status}</div>}
-          <ThemeBtn />
         </div>
       )}
 
@@ -375,7 +423,7 @@ export default function App() {
           <div className="loading-wordmark">quick encode<em>.</em></div>
           <div className="loading-bar-wrap">
             <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
-            <div className="loading-label">Reading file &amp; extracting frames…</div>
+            <div className="loading-label">Reading file &amp; extracting frames\u2026</div>
           </div>
         </div>
       )}
@@ -390,7 +438,7 @@ export default function App() {
               <ThemeBtn />
               <button className="file-chip" onClick={reset}>
                 <span>Clear all</span>
-                <span className="file-chip-x">✕</span>
+                <span className="file-chip-x">\u2715</span>
               </button>
             </div>
           </div>
@@ -398,23 +446,22 @@ export default function App() {
           <div className="batch-file-list">
             {batchFiles.map((f, i) => (
               <div key={f.path} className="batch-file-row">
-                <span className="batch-file-icon">▶</span>
+                <span className="batch-file-icon">\u25B6</span>
                 <span className="batch-file-name" title={f.path}>{basename(f.path)}</span>
                 <span className={`batch-file-status ${f.status}`}>
                   {f.status === "pending" ? "Pending"
-                    : f.status === "active" ? "Encoding…"
-                    : f.status === "done"   ? "✓ Done"
-                    : `✕ Error`}
+                    : f.status === "active" ? "Encoding\u2026"
+                    : f.status === "done"   ? "\u2713 Done"
+                    : "\u2715 Error"}
                 </span>
                 {!batchRunning && f.status !== "active" && (
-                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>✕</button>
+                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>\u2715</button>
                 )}
               </div>
             ))}
           </div>
 
           <div className="batch-bottom">
-            {/* Batch uses same settings row */}
             <div className="batch-settings-row settings-row">
               <div className="quality-col">
                 <div className="quality-header">
@@ -480,17 +527,22 @@ export default function App() {
               <div style={{ flex: 1 }} />
               {batchProgress && (
                 <span className="batch-count">
-                  {batchProgress.idx + 1}/{batchFiles.length} · {Math.round(batchProgress.enc.percent)}%
+                  {batchProgress.idx + 1}/{batchFiles.length} \u00B7 {Math.round(batchProgress.enc.percent)}%
                 </span>
               )}
-              <button className="preset-btn" onClick={handleDiscord} disabled={true}
-                title="Discord export not available in batch mode">
-                <span className="preset-icon">🎮</span>
+              <button
+                className="preset-btn"
+                onClick={() => startBatch(true)}
+                disabled={batchRunning}
+                title="Encode all files targeting \u22649 MB for Discord"
+              >
+                <DiscordIcon />
                 Discord Ready
+                <span className="preset-size">\u22649 MB each</span>
               </button>
-              <button className="btn-encode" onClick={startBatch} disabled={batchRunning}>
+              <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
                 {batchRunning
-                  ? <span className="btn-inner"><div className="spin" />Encoding…</span>
+                  ? <span className="btn-inner"><div className="spin" />Encoding\u2026</span>
                   : `Encode All (${batchFiles.length})`}
               </button>
             </div>
@@ -503,7 +555,6 @@ export default function App() {
       {screen === "editor" && info && (
         <div className="editor">
 
-          {/* Top bar */}
           <div className="topbar">
             <div className="topbar-left">
               <span className="topbar-name">quick encode<em>.</em></span>
@@ -511,21 +562,20 @@ export default function App() {
             <div className="topbar-right">
               <div className="file-chip" onClick={reset}>
                 <span>{basename(filePath)}</span>
-                <span className="file-chip-x">✕</span>
+                <span className="file-chip-x">\u2715</span>
               </div>
               <ThemeBtn />
               <span className="version-badge">v2.0</span>
             </div>
           </div>
 
-          {/* Meta strip */}
           <div className="video-meta">
             {(() => {
               const d = gcd(info.width, info.height);
               const items = [
                 { label: "Duration", val: fmtTime(info.duration_secs) },
                 { label: "Size",     val: fmtMb(info.size_mb) },
-                { label: "Res",      val: `${info.width}×${info.height}` },
+                { label: "Res",      val: `${info.width}\u00D7${info.height}` },
                 { label: "Bitrate",  val: `${(info.bitrate_kbps/1000).toFixed(1)} Mbps` },
                 { label: "Aspect",   val: `${info.width/d}:${info.height/d}` },
               ];
@@ -538,7 +588,6 @@ export default function App() {
             })()}
           </div>
 
-          {/* Preview */}
           <div className="preview-section">
             <div className="preview-grid">
               <div
@@ -554,7 +603,7 @@ export default function App() {
                 {currentOrig && (
                   <button className="preview-fullscreen-btn"
                     onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}
-                  >⛶</button>
+                  >\u26F6</button>
                 )}
               </div>
 
@@ -573,13 +622,13 @@ export default function App() {
                 {currentEnc && !encLoading && (
                   <button className="preview-fullscreen-btn"
                     onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}
-                  >⛶</button>
+                  >\u26F6</button>
                 )}
               </div>
             </div>
 
             <div className="frame-nav">
-              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
+              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>\u2039</button>
               <div className="frame-dots">
                 {Array.from({ length: FRAME_COUNT }, (_, i) => (
                   <button key={i}
@@ -588,14 +637,13 @@ export default function App() {
                   />
                 ))}
               </div>
-              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
+              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>\u203A</button>
               <span className="frame-label">
-                {frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}
+                {frameIdx + 1} / {FRAME_COUNT} \u00B7 {fmtTime(frameTs(frameIdx, info.duration_secs))}
               </span>
             </div>
           </div>
 
-          {/* Settings */}
           <div className="settings-row">
             <div className="quality-col">
               <div className="quality-header">
@@ -603,7 +651,7 @@ export default function App() {
                 <div className="quality-values">
                   <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
                   <span className="q-pct">{quality}%</span>
-                  <span className="q-est">≈ {fmtMb(estLow)}–{fmtMb(estHigh)}</span>
+                  <span className="q-est">\u2248 {fmtMb(estLow)}\u2013{fmtMb(estHigh)}</span>
                 </div>
               </div>
               <input type="range" min={5} max={100} value={quality}
@@ -655,26 +703,25 @@ export default function App() {
             </div>
           </div>
 
-          {/* Bottom bar */}
           <div className="bottom-bar">
             <div className="est-inline">
-              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
+              <span className="est-val">{fmtMb(estLow)} \u2013 {fmtMb(estHigh)}</span>
               {reduction !== 0 && (
-                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
+                <span className="est-diff">{reduction > 0 ? `\u2212${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
 
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}
+              title={`Targets ${DISCORD_TARGET} MB \u2014 ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}
             >
-              <span className="preset-icon">🎮</span>
+              <DiscordIcon />
               Discord Ready
-              <span className="preset-size">≤10 MB</span>
+              <span className="preset-size">\u226410 MB</span>
             </button>
 
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
               {encoding
-                ? <span className="btn-inner"><div className="spin" />Encoding…</span>
+                ? <span className="btn-inner"><div className="spin" />Encoding\u2026</span>
                 : "Start Encode"}
             </button>
           </div>
@@ -688,11 +735,11 @@ export default function App() {
         <div className="progress-overlay">
           <div className="progress-card">
             <div className="progress-title">
-              {progress.percent >= 100 ? "Done" : "Encoding…"}
+              {progress.percent >= 100 ? "Done" : "Encoding\u2026"}
             </div>
             <div className="progress-pass">
-              {progress.percent < 50 ? "Pass 1 / 2 — Analyzing"
-                : progress.percent < 100 ? "Pass 2 / 2 — Encoding"
+              {progress.percent < 50 ? "Pass 1 / 2 \u2014 Analyzing"
+                : progress.percent < 100 ? "Pass 2 / 2 \u2014 Encoding"
                 : "Finalizing"}
             </div>
             <div className="progress-bar-wrap">
@@ -709,7 +756,7 @@ export default function App() {
                     ? <span className="progress-done-msg">Complete</span>
                     : progress.percent >= 50 && progress.eta_secs > 0
                       ? `ETA ${fmtEta(progress.eta_secs)}`
-                      : "Calculating…"}
+                      : "Calculating\u2026"}
                 </span>
               </div>
             </div>
@@ -723,7 +770,7 @@ export default function App() {
           <span className="fullscreen-label">{fsImage.label}</span>
           <img src={`data:image/jpeg;base64,${fsImage.src}`} alt={fsImage.label}
             onClick={e => e.stopPropagation()} />
-          <div className="fullscreen-close" onClick={() => setFsImage(null)}>✕</div>
+          <div className="fullscreen-close" onClick={() => setFsImage(null)}>\u2715</div>
         </div>
       )}
     </div>
