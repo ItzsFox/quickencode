@@ -686,51 +686,62 @@ export default function App() {
             })()}
           </div>
 
+          {/*
+            preview-section: the 1fr grid cell; clips overflow.
+            preview-scaler:  flex-column wrapper so frame-nav is always a
+                             fixed-height footer and the grid gets the rest.
+            preview-grid:    flex:1 with min-height:0 — fills available space,
+                             never overflows.
+            preview-side:    aspect-ratio box capped at 100% of the grid cell
+                             height, so tall videos shrink instead of pushing
+                             the nav off screen.
+          */}
           <div className="preview-section">
-            <div className="preview-grid">
-              {/* aspect-ratio inline style makes the box exactly as tall as the video frame */}
-              <div
-                className="preview-side"
-                style={{ aspectRatio: previewAspect }}
-                onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}
-              >
-                {currentOrig ? (
-                  <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original" />
-                ) : (
-                  <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
-                )}
-                <span className="preview-tag">Original</span>
-                {currentOrig && (
-                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>⛶</button>
-                )}
+            <div className="preview-scaler">
+              <div className="preview-grid">
+                <div
+                  className="preview-side"
+                  style={{ aspectRatio: previewAspect }}
+                  onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}
+                >
+                  {currentOrig ? (
+                    <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original" />
+                  ) : (
+                    <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
+                  )}
+                  <span className="preview-tag">Original</span>
+                  {currentOrig && (
+                    <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>⛶</button>
+                  )}
+                </div>
+                <div
+                  className="preview-side"
+                  style={{ aspectRatio: previewAspect }}
+                  onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
+                >
+                  {encLoading ? (
+                    <div className="preview-loading"><div className="spin" /><span>Rendering</span></div>
+                  ) : currentEnc ? (
+                    <img src={`data:image/jpeg;base64,${currentEnc}`} alt="Output" />
+                  ) : (
+                    <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
+                  )}
+                  <span className="preview-tag">Output</span>
+                  {currentEnc && !encLoading && (
+                    <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>⛶</button>
+                  )}
+                </div>
               </div>
-              <div
-                className="preview-side"
-                style={{ aspectRatio: previewAspect }}
-                onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
-              >
-                {encLoading ? (
-                  <div className="preview-loading"><div className="spin" /><span>Rendering</span></div>
-                ) : currentEnc ? (
-                  <img src={`data:image/jpeg;base64,${currentEnc}`} alt="Output" />
-                ) : (
-                  <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
-                )}
-                <span className="preview-tag">Output</span>
-                {currentEnc && !encLoading && (
-                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>⛶</button>
-                )}
+              <div className="frame-nav">
+                <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
+                <div className="frame-dots">
+                  {Array.from({ length: FRAME_COUNT }, (_, i) => (
+                    <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} />
+                  ))}
+                </div>
+                <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
+                <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
               </div>
-            </div>
-            <div className="frame-nav">
-              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
-              <div className="frame-dots">
-                {Array.from({ length: FRAME_COUNT }, (_, i) => (
-                  <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} />
-                ))}
-              </div>
-              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
-              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
             </div>
           </div>
 
