@@ -27,9 +27,9 @@ interface DoneResult {
   finalMb:    number;
 }
 interface BatchDoneResult {
-  total:    number;
+  total:     number;
   succeeded: number;
-  failed:   number;
+  failed:    number;
   outputDir: string;
 }
 
@@ -406,7 +406,6 @@ export default function App() {
     </button>
   );
 
-  // Shared settings panel used by both editor and batch
   const QualitySettings = () => (
     <>
       <div className="quality-col">
@@ -542,7 +541,8 @@ export default function App() {
                   </svg>
                   Show in folder
                 </button>
-                <button className="done-btn-new" onClick={reset}>Import new file</button>
+                {/* filled primary style — same as drop-browse */}
+                <button className="done-btn-new drop-browse" onClick={reset}>Import new file</button>
               </div>
             </div>
           </div>
@@ -582,13 +582,15 @@ export default function App() {
             </div>
             <div className="done-filename">{batchDoneResult.outputDir}</div>
             <div className="done-actions">
-              <button className="done-btn-reveal" onClick={() => invoke("show_in_folder", { path: batchDoneResult.outputDir + "/dummy" })}>
+              {/* Pass the outputDir directly — show_in_folder uses /select, on Windows
+                  which needs a FILE path. For a folder we just open it via explorer directly. */}
+              <button className="done-btn-reveal" onClick={() => invoke("open_folder", { path: batchDoneResult.outputDir })}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
                 Show in folder
               </button>
-              <button className="done-btn-new" onClick={reset}>Import new file</button>
+              <button className="done-btn-new drop-browse" onClick={reset}>Import new file</button>
             </div>
           </div>
         </div>
@@ -749,7 +751,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── PROGRESS OVERLAY (single + batch) ── */}
+      {/* ── PROGRESS OVERLAY ── */}
       {(encoding || batchRunning) && progress && (
         <div className="progress-overlay">
           <div className="progress-card">
