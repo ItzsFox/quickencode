@@ -1,10 +1,10 @@
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 /// Resolve a sidecar binary using Tauri's proper resource resolution.
-pub fn resolve_bin(app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
+pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
     let triple = option_env!("TAURI_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
     let filename = format!("{name}-{triple}.exe");
 
@@ -19,7 +19,7 @@ pub fn resolve_bin(app: &tauri::AppHandle, name: &str) -> Result<std::path::Path
 
     #[cfg(not(debug_assertions))]
     {
-        let resource_dir = app
+        let resource_dir = _app
             .path()
             .resource_dir()
             .map_err(|e| format!("Could not resolve resource_dir: {e}"))?;
@@ -96,7 +96,6 @@ pub fn show_in_folder(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        // xdg-open the parent directory — no file-select equivalent on Linux
         if let Some(parent) = std::path::Path::new(&path).parent() {
             Command::new("xdg-open")
                 .arg(parent)
