@@ -134,7 +134,7 @@ export default function App() {
   const [batchFiles, setBatchFiles]             = useState<BatchFile[]>([]);
   const [batchProgress, setBatchProgress]       = useState<{idx: number; enc: EncodeProgress; currentFile: string} | null>(null);
   const [batchRunning, setBatchRunning]         = useState(false);
-  const [batchDiscordMode, setBatchDiscordMode] = useState(false);
+  const [, setBatchDiscordMode]                 = useState(false);
   const [batchDoneResult, setBatchDoneResult]   = useState<BatchDoneResult | null>(null);
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -686,16 +686,6 @@ export default function App() {
             })()}
           </div>
 
-          {/*
-            preview-section: the 1fr grid cell; clips overflow.
-            preview-scaler:  flex-column wrapper so frame-nav is always a
-                             fixed-height footer and the grid gets the rest.
-            preview-grid:    flex:1 with min-height:0 — fills available space,
-                             never overflows.
-            preview-side:    aspect-ratio box capped at 100% of the grid cell
-                             height, so tall videos shrink instead of pushing
-                             the nav off screen.
-          */}
           <div className="preview-section">
             <div className="preview-scaler">
               <div className="preview-grid">
