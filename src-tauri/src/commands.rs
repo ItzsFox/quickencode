@@ -106,6 +106,34 @@ pub fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Opens a folder directly in the system file explorer (no file selection).
+/// Used for batch output — we want to open the folder itself, not a parent.
+#[tauri::command]
+pub fn open_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct VideoInfo {
     pub duration_secs: f64,
