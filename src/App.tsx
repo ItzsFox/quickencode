@@ -53,7 +53,7 @@ function fmtMb(mb: number) {
   return mb >= 1024 ? `${(mb/1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
 }
 function fmtEta(s: number) {
-  if (s <= 0) return "\u2014";
+  if (s <= 0) return "—";
   if (s < 60) return `${Math.ceil(s)}s`;
   return `${Math.floor(s/60)}m ${Math.ceil(s%60)}s`;
 }
@@ -197,7 +197,7 @@ export default function App() {
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
       loadEncodedFrame(0, vbr, resolution, fps);
     } catch (e) {
-      setStatus(`\u274C ${e}`);
+      setStatus(`❌ ${e}`);
       setScreen("drop");
     }
   }, [resolution, quality, fps]);
@@ -285,7 +285,7 @@ export default function App() {
       setDoneResult({ outputPath: out, originalMb: info.size_mb, finalMb });
       setScreen("done");
     } catch (e) {
-      setStatus(`\u274C ${e}`);
+      setStatus(`❌ ${e}`);
     } finally {
       setEncoding(false);
       setProgress(null);
@@ -295,7 +295,7 @@ export default function App() {
   const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
   const handleDiscord = async () => {
     if (!info) return;
-    if (info.size_mb <= 10) { setStatus("\u2705 Already under 10 MB \u2014 no compression needed."); return; }
+    if (info.size_mb <= 10) { setStatus("✅ Already under 10 MB — no compression needed."); return; }
     const vbr = discordBr(info.duration_secs);
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
@@ -475,7 +475,7 @@ export default function App() {
           </div>
           <div className="drop-hint-text">
             <p>{dragOver ? "Drop to load" : "Drop files or folders here, or"}</p>
-            <small>MP4 \u00b7 MKV \u00b7 AVI \u00b7 MOV \u00b7 WebM \u00b7 M4V \u00b7 select multiple for batch</small>
+            <small>MP4 · MKV · AVI · MOV · WebM · M4V · select multiple for batch</small>
           </div>
           <div className="drop-actions">
             <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFiles(); }}>Browse files</button>
@@ -616,8 +616,8 @@ export default function App() {
                 <span className={`batch-file-status ${f.status}`}>
                   {f.status === "pending" ? "Pending"
                     : f.status === "active" ? "Encoding…"
-                    : f.status === "done"   ? "\u2713 Done"
-                    : "\u2715 Error"}
+                    : f.status === "done"   ? "✓ Done"
+                    : "✕ Error"}
                 </span>
                 {!batchRunning && f.status !== "active" && (
                   <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>×</button>
@@ -633,7 +633,7 @@ export default function App() {
             <div className="batch-actions">
               <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>+ Add more</button>
               <div style={{ flex: 1 }} />
-              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting \u22649 MB for Discord">
+              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤9 MB for Discord">
                 <DiscordIcon />
                 Discord Ready
                 <span className="preset-size">≤9 MB each</span>
@@ -670,7 +670,7 @@ export default function App() {
               const items = [
                 { label: "Duration", val: fmtTime(info.duration_secs) },
                 { label: "Size",     val: fmtMb(info.size_mb) },
-                { label: "Res",      val: `${info.width}\u00d7${info.height}` },
+                { label: "Res",      val: `${info.width}×${info.height}` },
                 { label: "Bitrate",  val: `${(info.bitrate_kbps/1000).toFixed(1)} Mbps` },
                 { label: "Aspect",   val: `${info.width/d}:${info.height/d}` },
               ];
@@ -718,7 +718,7 @@ export default function App() {
                 ))}
               </div>
               <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
-              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} \u00b7 {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
+              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
             </div>
           </div>
 
@@ -728,13 +728,13 @@ export default function App() {
 
           <div className="bottom-bar">
             <div className="est-inline">
-              <span className="est-val">{fmtMb(estLow)} \u2013 {fmtMb(estHigh)}</span>
+              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
               {reduction !== 0 && (
-                <span className="est-diff">{reduction > 0 ? `\u2212${reduction}%` : `+${Math.abs(reduction)}%`}</span>
+                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title={`Targets ${DISCORD_TARGET} MB \u2014 ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
+              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
               <DiscordIcon />
               Discord Ready
               <span className="preset-size">≤10 MB</span>
@@ -757,12 +757,12 @@ export default function App() {
             </div>
             {batchRunning && batchProgress && (
               <div className="progress-pass">
-                File {batchProgress.idx + 1} / {batchFiles.length} \u2014 {batchProgress.currentFile}
+                File {batchProgress.idx + 1} / {batchFiles.length} — {batchProgress.currentFile}
               </div>
             )}
             <div className="progress-pass">
-              {progress.percent < 50 ? "Pass 1 / 2 \u2014 Analyzing"
-                : progress.percent < 100 ? "Pass 2 / 2 \u2014 Encoding"
+              {progress.percent < 50 ? "Pass 1 / 2 — Analyzing"
+                : progress.percent < 100 ? "Pass 2 / 2 — Encoding"
                 : "Finalizing"}
             </div>
             <div className="progress-bar-wrap">
@@ -779,7 +779,7 @@ export default function App() {
                     ? <span className="progress-done-msg">Complete</span>
                     : progress.percent >= 50 && progress.eta_secs > 0
                       ? `ETA ${fmtEta(progress.eta_secs)}`
-                      : "Calculating\u2026"}
+                      : "Calculating…"}
                 </span>
               </div>
             </div>
