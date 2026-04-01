@@ -2,10 +2,10 @@ use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use tauri::Emitter;
-#[cfg(not(debug_assertions))]
-use tauri::Manager;
 
-/// Resolve a sidecar binary using Tauri's proper resource resolution.
+/// Resolve a sidecar binary path.
+/// - Debug: looks in src-tauri/binaries/ (dev workflow)
+/// - Release: looks next to the running .exe (where Tauri installs sidecars)
 pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
     let triple = option_env!("TAURI_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
     let filename = format!("{name}-{triple}.exe");
@@ -21,11 +21,12 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
 
     #[cfg(not(debug_assertions))]
     {
-        let resource_dir = _app
-            .path()
-            .resource_dir()
-            .map_err(|e| format!("Could not resolve resource_dir: {e}"))?;
-        let bin = resource_dir.join(&filename);
+        // Tauri places sidecar binaries next to the main executable.
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("Could not resolve current exe: {e}"))?;
+        let bin = exe.parent()
+            .ok_or("Could not get exe directory")?
+            .join(&filename);
         if bin.exists() { return Ok(bin); }
         Err(format!(
             "[release] Binary not found at: {}\nMake sure '{}' is listed under bundle.externalBin in tauri.conf.json",
