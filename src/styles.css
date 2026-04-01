@@ -619,22 +619,29 @@ body {
   font-weight: 600;
 }
 
-/* -- Preview -- */
+/* ══════════════════════════════════════════
+   PREVIEW
+   The grid row is 1fr — it gets whatever space
+   is left after the fixed rows. The images must
+   fill that space without ever exceeding it.
+   ══════════════════════════════════════════ */
 .preview-section {
+  /* Takes the 1fr row from .editor grid */
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 0;
   overflow: hidden;
 }
+
 .preview-grid {
+  /* Fill all available height from the flex parent */
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  flex: 1;
-  min-height: 0;
-  height: 100%;
 }
+
 .preview-side {
   position: relative;
   border-radius: var(--radius-card);
@@ -642,21 +649,21 @@ body {
   background: var(--surface-2);
   border: 1px solid var(--border);
   cursor: pointer;
+  /* Fill the grid cell completely — image will object-fit inside */
   min-height: 0;
+  min-width: 0;
   transition: border-color 0.18s;
-  /* Let the image's intrinsic aspect ratio drive the height */
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .preview-side:hover { border-color: var(--border-2); }
-/* Image fills width, height is auto — preserves aspect ratio */
+
+/* Image fills the entire container, letterboxed — no black gaps, no overflow */
 .preview-side img {
-  width: 100%;
-  height: auto;
   display: block;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
+
 .preview-tag {
   position: absolute;
   top: 8px;
