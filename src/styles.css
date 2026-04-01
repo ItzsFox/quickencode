@@ -118,6 +118,7 @@ body {
    ══════════════════════════════════════════ */
 .drop-screen {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -199,6 +200,7 @@ body {
    ══════════════════════════════════════════ */
 .loading-screen {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -258,6 +260,7 @@ body {
    ══════════════════════════════════════════ */
 .done-screen {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -376,27 +379,25 @@ body {
   color: var(--text);
   background: var(--surface-2);
 }
+/* "Import new file" — filled, same as Browse files */
 .done-btn-new {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 7px 18px;
-  background: none;
-  border: 1px solid var(--border);
+  background: var(--text);
+  color: var(--bg);
+  border: none;
   border-radius: var(--radius-pill);
-  font-size: 12px;
+  font-size: 12.5px;
   font-family: inherit;
   font-weight: 600;
-  color: var(--text-dim);
   cursor: pointer;
-  transition: border-color 0.14s, color 0.14s, background 0.14s;
+  transition: opacity 0.15s;
+  box-shadow: var(--shadow-sm);
   width: 100%;
 }
-.done-btn-new:hover {
-  border-color: var(--border-2);
-  color: var(--text-muted);
-  background: var(--surface-2);
-}
+.done-btn-new:hover { opacity: 0.82; }
 .done-actions .btn-encode {
   width: 100%;
   text-align: center;
