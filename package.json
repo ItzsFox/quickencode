@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "prepare-bins": "node scripts/download-ffmpeg.js",
+    "tauri:build": "npm run prepare-bins && tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
