@@ -650,7 +650,7 @@ body {
   border: 1px solid var(--border);
   cursor: pointer;
   /* Width fills the grid column; height is derived purely from aspect-ratio
-     set via inline style in JSX (style={{ aspectRatio: w/h }}). 
+     set via inline style in JSX (style={{ aspectRatio: w/h }}).
      This means the box is always exactly as tall as the image. */
   width: 100%;
   transition: border-color 0.18s;
@@ -662,7 +662,8 @@ body {
 .preview-side img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
 }
 
 .preview-tag {
@@ -703,9 +704,13 @@ body {
 }
 .preview-side:hover .preview-fullscreen-btn { opacity: 1; }
 .preview-fullscreen-btn:hover { color: var(--text-muted); }
+
+/* Loading state inside a preview-side: fill the parent completely.
+   The parent already has the correct aspect-ratio via inline style,
+   so we must NOT set our own aspect-ratio here — just stretch to fill. */
 .preview-loading {
-  width: 100%;
-  aspect-ratio: 16 / 9;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
