@@ -461,6 +461,9 @@ export default function App() {
     </>
   );
 
+  // Aspect ratio from video dimensions — used to size preview boxes exactly
+  const previewAspect = info ? info.width / info.height : 16 / 9;
+
   return (
     <div className="app">
 
@@ -685,7 +688,12 @@ export default function App() {
 
           <div className="preview-section">
             <div className="preview-grid">
-              <div className="preview-side" onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}>
+              {/* aspect-ratio inline style makes the box exactly as tall as the video frame */}
+              <div
+                className="preview-side"
+                style={{ aspectRatio: previewAspect }}
+                onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}
+              >
                 {currentOrig ? (
                   <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original" />
                 ) : (
@@ -696,7 +704,11 @@ export default function App() {
                   <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>⛶</button>
                 )}
               </div>
-              <div className="preview-side" onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}>
+              <div
+                className="preview-side"
+                style={{ aspectRatio: previewAspect }}
+                onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
+              >
                 {encLoading ? (
                   <div className="preview-loading"><div className="spin" /><span>Rendering</span></div>
                 ) : currentEnc ? (
