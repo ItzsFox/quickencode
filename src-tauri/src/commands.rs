@@ -4,14 +4,13 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use tauri::Emitter;
 
 /// Resolve a sidecar binary path.
-/// - Debug: looks in src-tauri/binaries/ (dev workflow)
-/// - Release: looks next to the running .exe (where Tauri installs sidecars)
+/// - Debug: looks in src-tauri/binaries/ with the target triple suffix (dev workflow)
+/// - Release: looks next to the running .exe using the plain name (Tauri strips the suffix on install)
 pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
-    let triple = option_env!("TAURI_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
-    let filename = format!("{name}-{triple}.exe");
-
     #[cfg(debug_assertions)]
     {
+        let triple = option_env!("TAURI_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
+        let filename = format!("{name}-{triple}.exe");
         let bin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(&filename);
@@ -21,7 +20,8 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
 
     #[cfg(not(debug_assertions))]
     {
-        // Tauri places sidecar binaries next to the main executable.
+        // Tauri strips the triple suffix when installing sidecars, so the file is just e.g. ffmpeg.exe
+        let filename = format!("{name}.exe");
         let exe = std::env::current_exe()
             .map_err(|e| format!("Could not resolve current exe: {e}"))?;
         let bin = exe.parent()
