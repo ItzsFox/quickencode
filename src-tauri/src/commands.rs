@@ -2,6 +2,8 @@ use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use tauri::Emitter;
+#[cfg(not(debug_assertions))]
+use tauri::Manager;
 
 /// Resolve a sidecar binary using Tauri's proper resource resolution.
 pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
