@@ -621,17 +621,22 @@ body {
 
 /* ══════════════════════════════════════════
    PREVIEW
-   ══════════════════════════════════════════ */
+   ══════════════════════════════════════════
 
-/*
- * Layout contract:
- *   .preview-section  — the 1fr cell in the editor grid; clips overflow
- *   .preview-scaler   — fills the section, uses flex-column so the grid
- *                       takes all remaining space and frame-nav is always visible
- *   .preview-grid     — contains the two side-by-side frames; constrained
- *                       to the available height so it never pushes frame-nav out
- *   .preview-side     — aspect-ratio box; width-driven, height capped by max-height
- */
+   Layout contract
+   ───────────────
+   .preview-section  — the 1fr cell in .editor's grid; clips overflow.
+   .preview-scaler   — flex-column: grid gets flex:1, frame-nav is a
+                       fixed-height flex-shrink:0 footer. Together they
+                       fill preview-section without ever overflowing.
+   .preview-grid     — the two side-by-side frames. flex:1 + min-height:0
+                       so it never pushes past its allocated space.
+                       align-items:stretch lets each column fill the height.
+   .preview-side     — aspect-ratio box. width=100% of its column; height
+                       is naturally derived by aspect-ratio but capped at
+                       100% of the grid's height so tall videos never
+                       overflow and push frame-nav off screen.
+*/
 
 .preview-section {
   min-height: 0;
@@ -640,24 +645,24 @@ body {
   overflow: hidden;
 }
 
-/* Wrapper that owns the flex sizing so frame-nav is always a fixed-height footer */
 .preview-scaler {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  gap: 7px;
   overflow: hidden;
 }
 
 .preview-grid {
-  /* Grow to fill remaining space, but never exceed it */
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  /* Prevent columns from ever stretching taller than the available area */
-  align-items: start;
+  /* stretch so columns fill available height; combined with max-height:100%
+     on .preview-side this creates a height ceiling for tall videos */
+  align-items: stretch;
   overflow: hidden;
 }
 
@@ -670,13 +675,16 @@ body {
   cursor: pointer;
   width: 100%;
   /*
-   * Width fills the grid column; aspect-ratio (set via JSX inline style)
-   * derives the natural height.  max-height caps it so the side can never
-   * be taller than the grid cell, which itself is bounded by the 1fr space
-   * minus the frame-nav row.  height:100% + object-fit on the img handles
-   * the case where the box is shorter than its natural aspect-ratio height.
+   * aspect-ratio (set via JSX inline style) provides the natural size.
+   * max-height:100% caps growth at whatever height the grid cell provides,
+   * so a 9:16 video won't push the frame-nav off the bottom of the window.
+   * margin:auto centers the box vertically when it's shorter than the cell.
    */
+  aspect-ratio: var(--preview-aspect, 16/9); /* fallback; overridden by inline style */
   max-height: 100%;
+  max-width: 100%;
+  height: auto;
+  align-self: center;
   transition: border-color 0.18s;
 }
 .preview-side:hover { border-color: var(--border-2); }
@@ -738,14 +746,18 @@ body {
 }
 .preview-loading span { font-size: 11px; color: var(--text-dim); }
 
-/* Frame nav — always visible, never pushed off screen */
+/*
+ * frame-nav: always a fixed-height footer.
+ * flex-shrink:0 is the critical rule — it prevents the nav from being
+ * compressed or pushed off screen regardless of how tall the preview is.
+ */
 .frame-nav {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding-top: 7px;
-  flex-shrink: 0;   /* ← critical: never compressed or hidden */
+  flex-shrink: 0;
+  padding-bottom: 2px;
 }
 .frame-nav-btn {
   width: 24px;
