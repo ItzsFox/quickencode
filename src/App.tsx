@@ -68,7 +68,7 @@ function qualityInfo(q: number) {
   if (q >= 20) return { label: "Low Quality",    cls: "c1" };
   return             { label: "Very Low",         cls: "c0" };
 }
-function basename(p: string) { return p.split(/[\\/]/).pop() ?? p; }
+function basename(p: string) { return p.split(/[\\\/]/).pop() ?? p; }
 function discordBr(dur: number) {
   return Math.max(Math.floor((DISCORD_TARGET * 8 * 1024) / dur) - DISCORD_AUDIO, 80);
 }
@@ -616,8 +616,8 @@ export default function App() {
                 <span className={`batch-file-status ${f.status}`}>
                   {f.status === "pending" ? "Pending"
                     : f.status === "active" ? "Encoding…"
-                    : f.status === "done"   ? "\u2713 Done"
-                    : "\u2715 Error"}
+                    : f.status === "done"   ? "✓ Done"
+                    : "✕ Error"}
                 </span>
                 {!batchRunning && f.status !== "active" && (
                   <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>&times;</button>
@@ -636,7 +636,7 @@ export default function App() {
               <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤9 MB for Discord">
                 <DiscordIcon />
                 Discord Ready
-                <span className="preset-size">&le;9 MB each</span>
+                <span className="preset-size">≤9 MB each</span>
               </button>
               <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
                 {batchRunning
@@ -693,7 +693,7 @@ export default function App() {
                 )}
                 <span className="preview-tag">Original</span>
                 {currentOrig && (
-                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>&#x26F6;</button>
+                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>⛶</button>
                 )}
               </div>
               <div className="preview-side" onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}>
@@ -706,19 +706,19 @@ export default function App() {
                 )}
                 <span className="preview-tag">Output</span>
                 {currentEnc && !encLoading && (
-                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>&#x26F6;</button>
+                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>⛶</button>
                 )}
               </div>
             </div>
             <div className="frame-nav">
-              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>&lsaquo;</button>
+              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
               <div className="frame-dots">
                 {Array.from({ length: FRAME_COUNT }, (_, i) => (
                   <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} />
                 ))}
               </div>
-              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>&rsaquo;</button>
-              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} &middot; {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
+              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
+              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
             </div>
           </div>
 
@@ -728,19 +728,19 @@ export default function App() {
 
           <div className="bottom-bar">
             <div className="est-inline">
-              <span className="est-val">{fmtMb(estLow)} &ndash; {fmtMb(estHigh)}</span>
+              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
               {reduction !== 0 && (
-                <span className="est-diff">{reduction > 0 ? `\u2212${reduction}%` : `+${Math.abs(reduction)}%`}</span>
+                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title={`Targets ${DISCORD_TARGET} MB &mdash; ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
+              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
               <DiscordIcon />
               Discord Ready
-              <span className="preset-size">&le;10 MB</span>
+              <span className="preset-size">≤10 MB</span>
             </button>
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
-              {encoding ? <span className="btn-inner"><div className="spin" />Encoding&hellip;</span> : "Start Encode"}
+              {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
             </button>
           </div>
 
@@ -753,16 +753,16 @@ export default function App() {
         <div className="progress-overlay">
           <div className="progress-card">
             <div className="progress-title">
-              {progress.percent >= 100 ? "Done" : "Encoding\u2026"}
+              {progress.percent >= 100 ? "Done" : "Encoding…"}
             </div>
             {batchRunning && batchProgress && (
               <div className="progress-pass">
-                File {batchProgress.idx + 1} / {batchFiles.length} &mdash; {batchProgress.currentFile}
+                File {batchProgress.idx + 1} / {batchFiles.length} — {batchProgress.currentFile}
               </div>
             )}
             <div className="progress-pass">
-              {progress.percent < 50 ? "Pass 1 / 2 \u2014 Analyzing"
-                : progress.percent < 100 ? "Pass 2 / 2 \u2014 Encoding"
+              {progress.percent < 50 ? "Pass 1 / 2 — Analyzing"
+                : progress.percent < 100 ? "Pass 2 / 2 — Encoding"
                 : "Finalizing"}
             </div>
             <div className="progress-bar-wrap">
@@ -779,7 +779,7 @@ export default function App() {
                     ? <span className="progress-done-msg">Complete</span>
                     : progress.percent >= 50 && progress.eta_secs > 0
                       ? `ETA ${fmtEta(progress.eta_secs)}`
-                      : "Calculating\u2026"}
+                      : "Calculating…"}
                 </span>
               </div>
             </div>
