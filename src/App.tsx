@@ -26,6 +26,12 @@ interface DoneResult {
   originalMb: number;
   finalMb:    number;
 }
+interface BatchDoneResult {
+  total:    number;
+  succeeded: number;
+  failed:   number;
+  outputDir: string;
+}
 
 const FRAME_COUNT    = 10;
 const DISCORD_TARGET = 9;
@@ -74,31 +80,21 @@ function isVideo(p: string) {
   return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
-// ── Logo SVG (inline, currentColor-aware) ──
 const QELogo = ({ size = 20 }: { size?: number }) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width={size} height={size}
-    viewBox="0 0 85 85"
-    fill="currentColor"
-    aria-label="quick encode logo"
-    style={{ flexShrink: 0, display: "block" }}
-  >
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 85 85" fill="currentColor" aria-label="quick encode logo" style={{ flexShrink: 0, display: "block" }}>
     <path d="M80 30C82.7614 30 85 32.2386 85 35V80C85 82.7614 82.7614 85 80 85H35C32.2386 85 30 82.7614 30 80V69H65C67.2091 69 69 67.2091 69 65V30H80ZM65 16C67.2091 16 69 17.7909 69 20V30H55V50C55 52.7614 52.7614 55 50 55H30V69H20C17.7909 69 16 67.2091 16 65V55H30V35C30 32.2386 32.2386 30 35 30H55V16H65ZM50 0C52.7614 0 55 2.23858 55 5V16H20C17.7909 16 16 17.7909 16 20V55H5C2.23858 55 0 52.7614 0 50V5C0 2.23858 2.23858 0 5 0H50Z" />
   </svg>
 );
 
-// Discord icon SVG
 const DiscordIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
     <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057.1 18.08.114 18.1.131 18.111a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
   </svg>
 );
 
-type Screen = "drop" | "loading" | "editor" | "batch" | "done";
+type Screen = "drop" | "loading" | "editor" | "batch" | "done" | "batch-done";
 
 export default function App() {
-  // ── Theme ──
   const initTheme = (): "light" | "dark" => {
     try { return (localStorage.getItem("qe_theme") as "light" | "dark") ?? "light"; }
     catch { return "light"; }
@@ -116,7 +112,6 @@ export default function App() {
     setThemeState(t => t === "light" ? "dark" : "light");
   };
 
-  // ── Core state ──
   const [screen, setScreen]         = useState<Screen>("drop");
   const [filePath, setFilePath]     = useState("");
   const [info, setInfo]             = useState<VideoInfo | null>(null);
@@ -136,11 +131,11 @@ export default function App() {
   const [status, setStatus]         = useState("");
   const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
 
-  // ── Batch state ──
-  const [batchFiles, setBatchFiles]           = useState<BatchFile[]>([]);
-  const [batchProgress, setBatchProgress]     = useState<{idx: number; enc: EncodeProgress} | null>(null);
-  const [batchRunning, setBatchRunning]       = useState(false);
+  const [batchFiles, setBatchFiles]             = useState<BatchFile[]>([]);
+  const [batchProgress, setBatchProgress]       = useState<{idx: number; enc: EncodeProgress; currentFile: string} | null>(null);
+  const [batchRunning, setBatchRunning]         = useState(false);
   const [batchDiscordMode, setBatchDiscordMode] = useState(false);
+  const [batchDoneResult, setBatchDoneResult]   = useState<BatchDoneResult | null>(null);
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -151,7 +146,6 @@ export default function App() {
   const estHigh = estMb * 1.15;
   const reduction = info ? Math.round((1 - estMb / info.size_mb) * 100) : 0;
 
-  // ── Encoded frame preview ──
   const loadEncodedFrame = useCallback((idx: number, vbr: number, res: string, f: string) => {
     if (!filePath || !info) return;
     if (encDebounce.current) clearTimeout(encDebounce.current);
@@ -183,7 +177,6 @@ export default function App() {
     if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps);
   }, [frameIdx]);
 
-  // ── Load single file ──
   const loadFile = useCallback(async (path: string) => {
     setScreen("loading");
     setFilePath(path);
@@ -209,7 +202,6 @@ export default function App() {
     }
   }, [resolution, quality, fps]);
 
-  // ── Resolve dropped paths ──
   const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
     const videos: string[] = [];
     for (const p of paths) {
@@ -225,7 +217,6 @@ export default function App() {
     return videos;
   }, []);
 
-  // ── Drag & drop ──
   useEffect(() => {
     let off: (() => void) | undefined;
     getCurrentWebview().onDragDropEvent(async (ev) => {
@@ -252,17 +243,14 @@ export default function App() {
     return () => off?.();
   }, [loadFile, resolveDroppedPaths]);
 
-  // ── Progress listener ──
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<EncodeProgress>("encode-progress", (ev) => {
       setProgress(ev.payload);
-      if (batchRunning) setBatchProgress(prev => prev ? { ...prev, enc: ev.payload } : null);
     }).then(fn => { unlisten = fn; });
     return () => unlisten?.();
-  }, [batchRunning]);
+  }, []);
 
-  // ── Pick files ──
   const pickFiles = async () => {
     const result = await open({
       multiple: true,
@@ -279,7 +267,6 @@ export default function App() {
   const goFrame = (delta: number) =>
     setFrameIdx(i => Math.max(0, Math.min(FRAME_COUNT - 1, i + delta)));
 
-  // ── Single encode ──
   const runEncode = async (vbr: number, abr: number, res: string, f: string, outPath?: string) => {
     if (!filePath || !info) return;
     const out = outPath ?? await save({ filters: [{ name: "Output", extensions: [format] }] });
@@ -293,7 +280,6 @@ export default function App() {
         audioBitrateKbps: abr, fps: f,
         durationSecs: info.duration_secs,
       });
-      // Read real output file size
       let finalMb = estMb;
       try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
       setDoneResult({ outputPath: out, originalMb: info.size_mb, finalMb });
@@ -317,33 +303,25 @@ export default function App() {
     runEncode(vbr, DISCORD_AUDIO, "original", "original", out);
   };
 
-  // ── Batch encode ──
   const runBatch = async (outputDir: string, discordMode: boolean) => {
     setBatchRunning(true);
+    let succeeded = 0;
+    let failed = 0;
     for (let i = 0; i < batchFiles.length; i++) {
       const file = batchFiles[i];
       setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "active" } : f));
-      setBatchProgress({ idx: i, enc: { percent: 0, eta_secs: 0, pass: 1 } });
+      setBatchProgress({ idx: i, enc: { percent: 0, eta_secs: 0, pass: 1 }, currentFile: basename(file.path) });
       const inName  = basename(file.path).replace(/\.[^.]+$/, "");
       const suffix  = discordMode ? "_discord" : "_encoded";
       const outFile = `${outputDir}/${inName}${suffix}.mp4`;
       try {
         const infoRaw = await invoke<VideoInfo>("get_video_info", { input: file.path });
-        let vbr: number;
-        let abr: number;
-        let res: string;
-        let f: string;
+        let vbr: number, abr: number, res: string, f: string;
         if (discordMode) {
-          vbr = discordBr(infoRaw.duration_secs);
-          abr = DISCORD_AUDIO;
-          res = "original";
-          f   = "original";
+          vbr = discordBr(infoRaw.duration_secs); abr = DISCORD_AUDIO; res = "original"; f = "original";
         } else {
           const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
-          vbr = Math.max(Math.round(b * (quality / 100)), 80);
-          abr = audio;
-          res = resolution;
-          f   = fps;
+          vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
         }
         await invoke("encode_video_with_progress", {
           input: file.path, output: outFile,
@@ -351,13 +329,17 @@ export default function App() {
           audioBitrateKbps: abr, fps: f,
           durationSecs: infoRaw.duration_secs,
         });
-        setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "done" } : f));
+        setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
+        succeeded++;
       } catch (e) {
-        setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "error", msg: String(e) } : f));
+        setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: String(e) } : bf));
+        failed++;
       }
     }
     setBatchRunning(false);
     setBatchProgress(null);
+    setBatchDoneResult({ total: batchFiles.length, succeeded, failed, outputDir });
+    setScreen("batch-done");
   };
 
   const startBatch = async (discordMode = false) => {
@@ -384,7 +366,7 @@ export default function App() {
     setOrigFrames([]); setEncFrames({}); setFrameIdx(0);
     setStatus(""); setProgress(null); setEncoding(false);
     setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
-    setBatchDiscordMode(false); setDoneResult(null);
+    setBatchDiscordMode(false); setDoneResult(null); setBatchDoneResult(null);
   };
 
   const ql          = qualityInfo(quality);
@@ -399,7 +381,6 @@ export default function App() {
     );
   };
 
-  // Wordmark with logo
   const Wordmark = ({ size = "base" }: { size?: "sm" | "base" }) => (
     <div className={`wordmark wordmark-${size}`}>
       <QELogo size={size === "sm" ? 14 : 17} />
@@ -407,14 +388,8 @@ export default function App() {
     </div>
   );
 
-  // Theme toggle
   const ThemeBtn = () => (
-    <button
-      className="theme-toggle"
-      onClick={toggleTheme}
-      title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-      aria-label="Toggle theme"
-    >
+    <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`} aria-label="Toggle theme">
       {theme === "light" ? (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
@@ -422,17 +397,69 @@ export default function App() {
       ) : (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="5"/>
-          <line x1="12" y1="1" x2="12" y2="3"/>
-          <line x1="12" y1="21" x2="12" y2="23"/>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-          <line x1="1" y1="12" x2="3" y2="12"/>
-          <line x1="21" y1="12" x2="23" y2="12"/>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+          <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
         </svg>
       )}
     </button>
+  );
+
+  // Shared settings panel used by both editor and batch
+  const QualitySettings = () => (
+    <>
+      <div className="quality-col">
+        <div className="quality-header">
+          <span className="section-label">Quality</span>
+          <div className="quality-values">
+            <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
+            <span className="q-pct">{quality}%</span>
+          </div>
+        </div>
+        <input type="range" min={5} max={100} value={quality}
+          style={{ background: slBg(quality, 5, 100) }}
+          onChange={e => setQuality(Number(e.target.value))}
+        />
+        <div className="range-labels"><span>Smallest</span><span>Best</span></div>
+      </div>
+      <div className="settings-divider" />
+      <div className="options-col">
+        <div className="options-grid">
+          <div className="setting"><label>Resolution</label>
+            <select value={resolution} onChange={e => setRes(e.target.value)}>
+              <option value="original">Original</option>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+            </select>
+          </div>
+          <div className="setting"><label>Format</label>
+            <select value={format} onChange={e => setFmt(e.target.value)}>
+              <option value="mp4">MP4</option>
+              <option value="mkv">MKV</option>
+              <option value="webm">WebM</option>
+            </select>
+          </div>
+          <div className="setting"><label>Audio</label>
+            <select value={audio} onChange={e => setAudio(Number(e.target.value))}>
+              <option value={64}>64 kbps</option>
+              <option value={128}>128 kbps</option>
+              <option value={192}>192 kbps</option>
+              <option value={256}>256 kbps</option>
+            </select>
+          </div>
+          <div className="setting"><label>FPS</label>
+            <select value={fps} onChange={e => setFps(e.target.value)}>
+              <option value="original">Original</option>
+              <option value="60">60 fps</option>
+              <option value="30">30 fps</option>
+              <option value="24">24 fps</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </>
   );
 
   return (
@@ -440,14 +467,8 @@ export default function App() {
 
       {/* ── DROP ── */}
       {screen === "drop" && (
-        <div
-          className={`drop-screen${dragOver ? " drag-over" : ""}`}
-          onClick={pickFiles}
-        >
-          <div className="drop-theme-btn">
-            <ThemeBtn />
-          </div>
-
+        <div className={`drop-screen${dragOver ? " drag-over" : ""}`} onClick={pickFiles}>
+          <div className="drop-theme-btn"><ThemeBtn /></div>
           <div className="drop-wordmark">
             <QELogo size={36} />
             <h1>quick encode<em>.</em></h1>
@@ -458,9 +479,7 @@ export default function App() {
             <small>MP4 · MKV · AVI · MOV · WebM · M4V · select multiple for batch</small>
           </div>
           <div className="drop-actions">
-            <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFiles(); }}>
-              Browse files
-            </button>
+            <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFiles(); }}>Browse files</button>
           </div>
           {status && <div className="status-bar">{status}</div>}
         </div>
@@ -482,7 +501,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── DONE SCREEN ── */}
+      {/* ── DONE (single) ── */}
       {screen === "done" && doneResult && (() => {
         const { outputPath, originalMb, finalMb } = doneResult;
         const saved = Math.round((1 - finalMb / originalMb) * 100);
@@ -496,10 +515,10 @@ export default function App() {
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
               </div>
-              <div className="done-title">Export complete</div>
+              <div className="done-title">Encode complete</div>
               <div className="done-stats">
                 <div className="done-stat">
-                  <span className="done-stat-label">Output size</span>
+                  <span className="done-stat-label">Output</span>
                   <span className="done-stat-val">{fmtMb(finalMb)}</span>
                 </div>
                 <div className="done-stat-divider" />
@@ -509,7 +528,7 @@ export default function App() {
                 </div>
                 <div className="done-stat-divider" />
                 <div className="done-stat">
-                  <span className="done-stat-label">Compression</span>
+                  <span className="done-stat-label">Saved</span>
                   <span className={`done-stat-val ${grew ? "done-stat-warn" : "done-stat-green"}`}>
                     {grew ? `+${Math.abs(saved)}%` : `-${saved}%`}
                   </span>
@@ -517,26 +536,63 @@ export default function App() {
               </div>
               <div className="done-filename">{basename(outputPath)}</div>
               <div className="done-actions">
-                <button
-                  className="done-btn-reveal"
-                  onClick={() => invoke("show_in_folder", { path: outputPath })}
-                >
+                <button className="done-btn-reveal" onClick={() => invoke("show_in_folder", { path: outputPath })}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                   </svg>
                   Show in folder
                 </button>
-                <button className="done-btn-new" onClick={() => loadFile(filePath)}>
-                  Encode again
-                </button>
-                <button className="btn-encode" onClick={reset}>
-                  Import new file
-                </button>
+                <button className="done-btn-new" onClick={reset}>Import new file</button>
               </div>
             </div>
           </div>
         );
       })()}
+
+      {/* ── BATCH DONE ── */}
+      {screen === "batch-done" && batchDoneResult && (
+        <div className="done-screen">
+          <div className="done-theme-btn"><ThemeBtn /></div>
+          <div className="done-card">
+            <div className="done-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </div>
+            <div className="done-title">Encode complete</div>
+            <div className="done-stats">
+              <div className="done-stat">
+                <span className="done-stat-label">Total</span>
+                <span className="done-stat-val">{batchDoneResult.total}</span>
+              </div>
+              <div className="done-stat-divider" />
+              <div className="done-stat">
+                <span className="done-stat-label">Done</span>
+                <span className="done-stat-val done-stat-green">{batchDoneResult.succeeded}</span>
+              </div>
+              {batchDoneResult.failed > 0 && (
+                <>
+                  <div className="done-stat-divider" />
+                  <div className="done-stat">
+                    <span className="done-stat-label">Failed</span>
+                    <span className="done-stat-val done-stat-warn">{batchDoneResult.failed}</span>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="done-filename">{batchDoneResult.outputDir}</div>
+            <div className="done-actions">
+              <button className="done-btn-reveal" onClick={() => invoke("show_in_folder", { path: batchDoneResult.outputDir + "/dummy" })}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                Show in folder
+              </button>
+              <button className="done-btn-new" onClick={reset}>Import new file</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── BATCH SCREEN ── */}
       {screen === "batch" && (
@@ -573,78 +629,12 @@ export default function App() {
 
           <div className="batch-bottom">
             <div className="batch-settings-row settings-row">
-              <div className="quality-col">
-                <div className="quality-header">
-                  <span className="section-label">Quality</span>
-                  <div className="quality-values">
-                    <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
-                    <span className="q-pct">{quality}%</span>
-                  </div>
-                </div>
-                <input type="range" min={5} max={100} value={quality}
-                  style={{ background: slBg(quality, 5, 100) }}
-                  onChange={e => setQuality(Number(e.target.value))}
-                />
-                <div className="range-labels"><span>Smallest</span><span>Best</span></div>
-              </div>
-              <div className="settings-divider" />
-              <div className="options-col">
-                <div className="options-grid">
-                  <div className="setting">
-                    <label>Resolution</label>
-                    <select value={resolution} onChange={e => setRes(e.target.value)}>
-                      <option value="original">Original</option>
-                      <option value="1080p">1080p</option>
-                      <option value="720p">720p</option>
-                      <option value="480p">480p</option>
-                    </select>
-                  </div>
-                  <div className="setting">
-                    <label>Format</label>
-                    <select value={format} onChange={e => setFmt(e.target.value)}>
-                      <option value="mp4">MP4</option>
-                      <option value="mkv">MKV</option>
-                      <option value="webm">WebM</option>
-                    </select>
-                  </div>
-                  <div className="setting">
-                    <label>Audio</label>
-                    <select value={audio} onChange={e => setAudio(Number(e.target.value))}>
-                      <option value={64}>64 kbps</option>
-                      <option value={128}>128 kbps</option>
-                      <option value={192}>192 kbps</option>
-                      <option value={256}>256 kbps</option>
-                    </select>
-                  </div>
-                  <div className="setting">
-                    <label>FPS</label>
-                    <select value={fps} onChange={e => setFps(e.target.value)}>
-                      <option value="original">Original</option>
-                      <option value="60">60 fps</option>
-                      <option value="30">30 fps</option>
-                      <option value="24">24 fps</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
+              <QualitySettings />
             </div>
-
             <div className="batch-actions">
-              <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>
-                + Add more
-              </button>
+              <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>+ Add more</button>
               <div style={{ flex: 1 }} />
-              {batchProgress && (
-                <span className="batch-count">
-                  {batchProgress.idx + 1}/{batchFiles.length} · {Math.round(batchProgress.enc.percent)}%
-                </span>
-              )}
-              <button
-                className="preset-btn"
-                onClick={() => startBatch(true)}
-                disabled={batchRunning}
-                title="Encode all files targeting ≤9 MB for Discord"
-              >
+              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤9 MB for Discord">
                 <DiscordIcon />
                 Discord Ready
                 <span className="preset-size">≤9 MB each</span>
@@ -663,11 +653,8 @@ export default function App() {
       {/* ── EDITOR ── */}
       {screen === "editor" && info && (
         <div className="editor">
-
           <div className="topbar">
-            <div className="topbar-left">
-              <Wordmark size="sm" />
-            </div>
+            <div className="topbar-left"><Wordmark size="sm" /></div>
             <div className="topbar-right">
               <div className="file-chip" onClick={reset}>
                 <span>{basename(filePath)}</span>
@@ -699,10 +686,7 @@ export default function App() {
 
           <div className="preview-section">
             <div className="preview-grid">
-              <div
-                className="preview-side"
-                onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}
-              >
+              <div className="preview-side" onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}>
                 {currentOrig ? (
                   <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original" />
                 ) : (
@@ -710,16 +694,10 @@ export default function App() {
                 )}
                 <span className="preview-tag">Original</span>
                 {currentOrig && (
-                  <button className="preview-fullscreen-btn"
-                    onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}
-                  >⛶</button>
+                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>⛶</button>
                 )}
               </div>
-
-              <div
-                className="preview-side"
-                onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
-              >
+              <div className="preview-side" onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}>
                 {encLoading ? (
                   <div className="preview-loading"><div className="spin" /><span>Rendering</span></div>
                 ) : currentEnc ? (
@@ -729,85 +707,24 @@ export default function App() {
                 )}
                 <span className="preview-tag">Output</span>
                 {currentEnc && !encLoading && (
-                  <button className="preview-fullscreen-btn"
-                    onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}
-                  >⛶</button>
+                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>⛶</button>
                 )}
               </div>
             </div>
-
             <div className="frame-nav">
               <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
               <div className="frame-dots">
                 {Array.from({ length: FRAME_COUNT }, (_, i) => (
-                  <button key={i}
-                    className={`frame-dot${i === frameIdx ? " active" : ""}`}
-                    onClick={() => setFrameIdx(i)}
-                  />
+                  <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} />
                 ))}
               </div>
               <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
-              <span className="frame-label">
-                {frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}
-              </span>
+              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
             </div>
           </div>
 
           <div className="settings-row">
-            <div className="quality-col">
-              <div className="quality-header">
-                <span className="section-label">Quality</span>
-                <div className="quality-values">
-                  <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
-                  <span className="q-pct">{quality}%</span>
-                </div>
-              </div>
-              <input type="range" min={5} max={100} value={quality}
-                style={{ background: slBg(quality, 5, 100) }}
-                onChange={e => setQuality(Number(e.target.value))}
-              />
-              <div className="range-labels"><span>Smallest</span><span>Best</span></div>
-            </div>
-            <div className="settings-divider" />
-            <div className="options-col">
-              <div className="options-grid">
-                <div className="setting">
-                  <label>Resolution</label>
-                  <select value={resolution} onChange={e => setRes(e.target.value)}>
-                    <option value="original">Original</option>
-                    <option value="1080p">1080p</option>
-                    <option value="720p">720p</option>
-                    <option value="480p">480p</option>
-                  </select>
-                </div>
-                <div className="setting">
-                  <label>Format</label>
-                  <select value={format} onChange={e => setFmt(e.target.value)}>
-                    <option value="mp4">MP4</option>
-                    <option value="mkv">MKV</option>
-                    <option value="webm">WebM</option>
-                  </select>
-                </div>
-                <div className="setting">
-                  <label>Audio</label>
-                  <select value={audio} onChange={e => setAudio(Number(e.target.value))}>
-                    <option value={64}>64 kbps</option>
-                    <option value={128}>128 kbps</option>
-                    <option value={192}>192 kbps</option>
-                    <option value={256}>256 kbps</option>
-                  </select>
-                </div>
-                <div className="setting">
-                  <label>FPS</label>
-                  <select value={fps} onChange={e => setFps(e.target.value)}>
-                    <option value="original">Original</option>
-                    <option value="60">60 fps</option>
-                    <option value="30">30 fps</option>
-                    <option value="24">24 fps</option>
-                  </select>
-                </div>
-              </div>
-            </div>
+            <QualitySettings />
           </div>
 
           <div className="bottom-bar">
@@ -817,19 +734,14 @@ export default function App() {
                 <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
-
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}
-            >
+              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
               <DiscordIcon />
               Discord Ready
               <span className="preset-size">≤10 MB</span>
             </button>
-
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
-              {encoding
-                ? <span className="btn-inner"><div className="spin" />Encoding…</span>
-                : "Start Encode"}
+              {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
             </button>
           </div>
 
@@ -837,13 +749,18 @@ export default function App() {
         </div>
       )}
 
-      {/* ── PROGRESS OVERLAY ── */}
-      {encoding && progress && (
+      {/* ── PROGRESS OVERLAY (single + batch) ── */}
+      {(encoding || batchRunning) && progress && (
         <div className="progress-overlay">
           <div className="progress-card">
             <div className="progress-title">
               {progress.percent >= 100 ? "Done" : "Encoding…"}
             </div>
+            {batchRunning && batchProgress && (
+              <div className="progress-pass">
+                File {batchProgress.idx + 1} / {batchFiles.length} — {batchProgress.currentFile}
+              </div>
+            )}
             <div className="progress-pass">
               {progress.percent < 50 ? "Pass 1 / 2 — Analyzing"
                 : progress.percent < 100 ? "Pass 2 / 2 — Encoding"
@@ -867,6 +784,11 @@ export default function App() {
                 </span>
               </div>
             </div>
+            {batchRunning && batchProgress && (
+              <div className="progress-numbers" style={{ marginTop: -8 }}>
+                <span className="progress-file-label">Overall: {batchProgress.idx + 1} / {batchFiles.length}</span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -875,8 +797,7 @@ export default function App() {
       {fsImage && (
         <div className="fullscreen-overlay" onClick={() => setFsImage(null)}>
           <span className="fullscreen-label">{fsImage.label}</span>
-          <img src={`data:image/jpeg;base64,${fsImage.src}`} alt={fsImage.label}
-            onClick={e => e.stopPropagation()} />
+          <img src={`data:image/jpeg;base64,${fsImage.src}`} alt={fsImage.label} onClick={e => e.stopPropagation()} />
           <div className="fullscreen-close" onClick={() => setFsImage(null)}>×</div>
         </div>
       )}
