@@ -494,7 +494,7 @@ export default function App() {
             </div>
             <div className="loading-bar-wrap">
               <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
-              <div className="loading-label">Reading file &amp; extracting frames…</div>
+              <div className="loading-label">Reading file &amp; extracting frames&hellip;</div>
             </div>
           </div>
         </div>
@@ -603,7 +603,7 @@ export default function App() {
               <ThemeBtn />
               <button className="file-chip" onClick={reset}>
                 <span>Clear all</span>
-                <span className="file-chip-x">×</span>
+                <span className="file-chip-x">&times;</span>
               </button>
             </div>
           </div>
@@ -611,16 +611,16 @@ export default function App() {
           <div className="batch-file-list">
             {batchFiles.map((f, i) => (
               <div key={f.path} className="batch-file-row">
-                <span className="batch-file-icon">▶</span>
+                <span className="batch-file-icon">&#9654;</span>
                 <span className="batch-file-name" title={f.path}>{basename(f.path)}</span>
                 <span className={`batch-file-status ${f.status}`}>
                   {f.status === "pending" ? "Pending"
                     : f.status === "active" ? "Encoding…"
-                    : f.status === "done"   ? "✓ Done"
-                    : "✕ Error"}
+                    : f.status === "done"   ? "\u2713 Done"
+                    : "\u2715 Error"}
                 </span>
                 {!batchRunning && f.status !== "active" && (
-                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>×</button>
+                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>&times;</button>
                 )}
               </div>
             ))}
@@ -636,7 +636,7 @@ export default function App() {
               <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤9 MB for Discord">
                 <DiscordIcon />
                 Discord Ready
-                <span className="preset-size">≤9 MB each</span>
+                <span className="preset-size">&le;9 MB each</span>
               </button>
               <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
                 {batchRunning
@@ -657,7 +657,7 @@ export default function App() {
             <div className="topbar-right">
               <div className="file-chip" onClick={reset}>
                 <span>{basename(filePath)}</span>
-                <span className="file-chip-x">×</span>
+                <span className="file-chip-x">&times;</span>
               </div>
               <ThemeBtn />
               <span className="version-badge">v2.0</span>
@@ -670,7 +670,7 @@ export default function App() {
               const items = [
                 { label: "Duration", val: fmtTime(info.duration_secs) },
                 { label: "Size",     val: fmtMb(info.size_mb) },
-                { label: "Res",      val: `${info.width}×${info.height}` },
+                { label: "Res",      val: `${info.width}\u00d7${info.height}` },
                 { label: "Bitrate",  val: `${(info.bitrate_kbps/1000).toFixed(1)} Mbps` },
                 { label: "Aspect",   val: `${info.width/d}:${info.height/d}` },
               ];
@@ -693,7 +693,7 @@ export default function App() {
                 )}
                 <span className="preview-tag">Original</span>
                 {currentOrig && (
-                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>⛶</button>
+                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>&#x26F6;</button>
                 )}
               </div>
               <div className="preview-side" onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}>
@@ -706,19 +706,19 @@ export default function App() {
                 )}
                 <span className="preview-tag">Output</span>
                 {currentEnc && !encLoading && (
-                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>⛶</button>
+                  <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>&#x26F6;</button>
                 )}
               </div>
             </div>
             <div className="frame-nav">
-              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
+              <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>&lsaquo;</button>
               <div className="frame-dots">
                 {Array.from({ length: FRAME_COUNT }, (_, i) => (
                   <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} />
                 ))}
               </div>
-              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
-              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
+              <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>&rsaquo;</button>
+              <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} &middot; {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
             </div>
           </div>
 
@@ -728,19 +728,19 @@ export default function App() {
 
           <div className="bottom-bar">
             <div className="est-inline">
-              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
+              <span className="est-val">{fmtMb(estLow)} &ndash; {fmtMb(estHigh)}</span>
               {reduction !== 0 && (
-                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
+                <span className="est-diff">{reduction > 0 ? `\u2212${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
+              title={`Targets ${DISCORD_TARGET} MB &mdash; ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
               <DiscordIcon />
               Discord Ready
-              <span className="preset-size">≤10 MB</span>
+              <span className="preset-size">&le;10 MB</span>
             </button>
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
-              {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
+              {encoding ? <span className="btn-inner"><div className="spin" />Encoding&hellip;</span> : "Start Encode"}
             </button>
           </div>
 
@@ -753,16 +753,16 @@ export default function App() {
         <div className="progress-overlay">
           <div className="progress-card">
             <div className="progress-title">
-              {progress.percent >= 100 ? "Done" : "Encoding…"}
+              {progress.percent >= 100 ? "Done" : "Encoding\u2026"}
             </div>
             {batchRunning && batchProgress && (
               <div className="progress-pass">
-                File {batchProgress.idx + 1} / {batchFiles.length} — {batchProgress.currentFile}
+                File {batchProgress.idx + 1} / {batchFiles.length} &mdash; {batchProgress.currentFile}
               </div>
             )}
             <div className="progress-pass">
-              {progress.percent < 50 ? "Pass 1 / 2 — Analyzing"
-                : progress.percent < 100 ? "Pass 2 / 2 — Encoding"
+              {progress.percent < 50 ? "Pass 1 / 2 \u2014 Analyzing"
+                : progress.percent < 100 ? "Pass 2 / 2 \u2014 Encoding"
                 : "Finalizing"}
             </div>
             <div className="progress-bar-wrap">
@@ -779,7 +779,7 @@ export default function App() {
                     ? <span className="progress-done-msg">Complete</span>
                     : progress.percent >= 50 && progress.eta_secs > 0
                       ? `ETA ${fmtEta(progress.eta_secs)}`
-                      : "Calculating…"}
+                      : "Calculating\u2026"}
                 </span>
               </div>
             </div>
@@ -797,7 +797,7 @@ export default function App() {
         <div className="fullscreen-overlay" onClick={() => setFsImage(null)}>
           <span className="fullscreen-label">{fsImage.label}</span>
           <img src={`data:image/jpeg;base64,${fsImage.src}`} alt={fsImage.label} onClick={e => e.stopPropagation()} />
-          <div className="fullscreen-close" onClick={() => setFsImage(null)}>×</div>
+          <div className="fullscreen-close" onClick={() => setFsImage(null)}>&times;</div>
         </div>
       )}
     </div>
