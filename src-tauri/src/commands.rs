@@ -3,6 +3,24 @@ use std::io::{BufRead, BufReader};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use tauri::Emitter;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Extension trait to suppress the console window on Windows.
+trait NoWindow {
+    fn no_window(&mut self) -> &mut Self;
+}
+
+impl NoWindow for Command {
+    fn no_window(&mut self) -> &mut Self {
+        #[cfg(target_os = "windows")]
+        self.creation_flags(CREATE_NO_WINDOW);
+        self
+    }
+}
+
 /// Resolve a sidecar binary path.
 /// - Debug: looks in src-tauri/binaries/ with the target triple suffix (dev workflow)
 /// - Release: looks next to the running .exe using the plain name (Tauri strips the suffix on install)
@@ -20,7 +38,6 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
 
     #[cfg(not(debug_assertions))]
     {
-        // Tauri strips the triple suffix when installing sidecars, so the file is just e.g. ffmpeg.exe
         let filename = format!("{name}.exe");
         let exe = std::env::current_exe()
             .map_err(|e| format!("Could not resolve current exe: {e}"))?;
@@ -159,6 +176,7 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
 
     let fmt_out = Command::new(&ffprobe)
         .args(["-v", "quiet", "-print_format", "json", "-show_format", &input])
+        .no_window()
         .output().map_err(|e| e.to_string())?;
     let fmt_json: serde_json::Value =
         serde_json::from_slice(&fmt_out.stdout).map_err(|e| e.to_string())?;
@@ -177,6 +195,7 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
     let stream_out = Command::new(&ffprobe)
         .args(["-v", "quiet", "-print_format", "json",
                "-show_streams", "-select_streams", "v:0", &input])
+        .no_window()
         .output().map_err(|e| e.to_string())?;
     let stream_json: serde_json::Value =
         serde_json::from_slice(&stream_out.stdout).map_err(|e| e.to_string())?;
@@ -207,6 +226,7 @@ pub async fn get_video_frames(
 
         let fmt_out = Command::new(&ffprobe)
             .args(["-v", "quiet", "-print_format", "json", "-show_format", &input])
+            .no_window()
             .output().map_err(|e| e.to_string())?;
         let fmt_json: serde_json::Value =
             serde_json::from_slice(&fmt_out.stdout).map_err(|e| e.to_string())?;
@@ -224,6 +244,7 @@ pub async fn get_video_frames(
             Command::new(&ffmpeg)
                 .args(["-y", "-ss", &ts_str, "-i", &input,
                        "-vframes", "1", "-vf", "scale=1280:-2", "-q:v", "3", &out_str])
+                .no_window()
                 .output().map_err(|e| e.to_string())?;
 
             let bytes = std::fs::read(&out_path)
@@ -277,10 +298,11 @@ pub async fn get_encoded_frame(
             "-preset".into(), "ultrafast".into(),
             "-an".into(), clip_s.clone(),
         ]);
-        Command::new(&ffmpeg).args(&args).output().map_err(|e| e.to_string())?;
+        Command::new(&ffmpeg).args(&args).no_window().output().map_err(|e| e.to_string())?;
 
         Command::new(&ffmpeg)
             .args(["-y", "-i", &clip_s, "-vframes", "1", "-q:v", "3", &frame_s])
+            .no_window()
             .output().map_err(|e| e.to_string())?;
 
         if !frame.exists() || std::fs::metadata(&frame).map(|m| m.len()).unwrap_or(0) == 0 {
@@ -339,6 +361,7 @@ pub async fn encode_video_with_progress(
             "-an".into(), "-f".into(), "null".into(), "NUL".into(),
         ]);
         let s1 = Command::new(&ffmpeg).args(&pass1)
+            .no_window()
             .stderr(Stdio::null())
             .status().map_err(|e| e.to_string())?;
         if !s1.success() { return Err("FFmpeg pass 1 failed".into()); }
@@ -367,6 +390,7 @@ pub async fn encode_video_with_progress(
 
         let mut child = Command::new(&ffmpeg)
             .args(&pass2)
+            .no_window()
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
