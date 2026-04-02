@@ -48,6 +48,13 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const [trimStart,   setTrimStart]   = useState(0);
   const [trimEnd,     setTrimEnd]     = useState(duration);
 
+  // Mirror trim state into refs so pointer-move callbacks always read fresh
+  // values without needing to be re-created on every state change.
+  const trimStartRef = useRef(0);
+  const trimEndRef   = useRef(duration);
+  useEffect(() => { trimStartRef.current = trimStart; }, [trimStart]);
+  useEffect(() => { trimEndRef.current   = trimEnd;   }, [trimEnd]);
+
   // Drag state stored in refs (no re-render on every mousemove)
   const dragging    = useRef<DragTarget>(null);
   const dragStartX  = useRef(0);
@@ -79,9 +86,9 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     if (!v) return;
     const onTime = () => {
       setCurrentTime(v.currentTime);
-      if (v.currentTime >= trimEnd) {
+      if (v.currentTime >= trimEndRef.current) {
         v.pause();
-        v.currentTime = trimEnd;
+        v.currentTime = trimEndRef.current;
         setPlaying(false);
       }
     };
@@ -95,7 +102,21 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
       v.removeEventListener("play",          onPlay);
       v.removeEventListener("pause",         onPause);
     };
-  }, [trimEnd]);
+  // trimEndRef is a ref — only needs to run once on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── play / pause ─────────────────────────────────────────────────────────
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      if (v.currentTime >= trimEndRef.current) v.currentTime = trimStartRef.current;
+      v.play();
+    } else {
+      v.pause();
+    }
+  }, []);
 
   // ── space bar ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -107,19 +128,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
-
-  // ── play / pause ─────────────────────────────────────────────────────────
-  const togglePlay = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) {
-      if (v.currentTime >= trimEnd) v.currentTime = trimStart;
-      v.play();
-    } else {
-      v.pause();
-    }
-  };
+  }, [togglePlay]);
 
   // ── seek helper ──────────────────────────────────────────────────────────
   const seekTo = useCallback((t: number) => {
@@ -130,51 +139,43 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     setCurrentTime(clamped);
   }, [duration]);
 
-  // ── pixel → time helper ──────────────────────────────────────────────────
-  const pxToTime = useCallback((clientX: number): number => {
-    const el = timelineRef.current;
-    if (!el || duration <= 0) return 0;
-    const rect = el.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return ratio * duration;
-  }, [duration]);
-
   // ── pointer-event drag for trim handles ─────────────────────────────────
-  // We attach move/up on the timeline container (not window) so it stays
-  // tightly contained and doesn't fight with other DOM events.
-  const THUMB_HIT = 16; // px either side of a thumb counts as a hit
+  // THUMB_HIT: px radius around a handle centre that counts as a handle grab.
+  // Kept tight (10px) so bare-track clicks reliably seek instead of dragging.
+  const THUMB_HIT = 10;
 
   const onTimelinePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const el = timelineRef.current;
     if (!el || duration <= 0) return;
-    const rect  = el.getBoundingClientRect();
+    const rect   = el.getBoundingClientRect();
     const ratio  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const clickT = ratio * duration;
-
-    // Determine which thumb (if any) is near the pointer
-    const startPx = (trimStart / duration) * rect.width;
-    const endPx   = (trimEnd   / duration) * rect.width;
     const clickPx = ratio * rect.width;
+
+    // Use ref values so we always have the latest trim positions
+    const startPx = (trimStartRef.current / duration) * rect.width;
+    const endPx   = (trimEndRef.current   / duration) * rect.width;
 
     const nearStart = Math.abs(clickPx - startPx) <= THUMB_HIT;
     const nearEnd   = Math.abs(clickPx - endPx)   <= THUMB_HIT;
 
     if (nearStart || nearEnd) {
-      // Prefer end thumb if the two overlap and we're on the right half
+      // When both handles are within hit range pick by which side of the
+      // midpoint the click landed on.
       const target: DragTarget = (nearStart && nearEnd)
-        ? (clickPx > (startPx + endPx) / 2 ? "end" : "start")
+        ? (clickPx >= (startPx + endPx) / 2 ? "end" : "start")
         : nearStart ? "start" : "end";
 
       dragging.current    = target;
       dragStartX.current  = e.clientX;
-      dragStartTs.current = target === "start" ? trimStart : trimEnd;
+      dragStartTs.current = target === "start" ? trimStartRef.current : trimEndRef.current;
       el.setPointerCapture(e.pointerId);
       e.stopPropagation();
     } else {
-      // Bare track click → seek
+      // Bare track click → seek video to that position
       seekTo(clickT);
     }
-  }, [duration, trimStart, trimEnd, seekTo]);
+  }, [duration, seekTo]);
 
   const onTimelinePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragging.current || !timelineRef.current || duration <= 0) return;
@@ -184,11 +185,12 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     const newT = Math.max(0, Math.min(duration, dragStartTs.current + dt));
 
     if (dragging.current === "start") {
-      setTrimStart(Math.min(newT, trimEnd - 0.1));
+      // Read trimEndRef so we never rely on a stale closure value
+      setTrimStart(Math.min(newT, trimEndRef.current - 0.1));
     } else {
-      setTrimEnd(Math.max(newT, trimStart + 0.1));
+      setTrimEnd(Math.max(newT, trimStartRef.current + 0.1));
     }
-  }, [duration, trimStart, trimEnd]);
+  }, [duration]);
 
   const onTimelinePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return;
@@ -235,6 +237,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
         <video
           ref={videoRef}
           src={videoSrc}
+          crossOrigin="anonymous"
           preload="auto"
           playsInline
           onLoadedMetadata={() => {
@@ -275,7 +278,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
       {/*
         Single timeline bar that combines:
           • Playhead scrub (click bare track → seek)
-          • Trim in/out handles (drag left/right bookends)
+          • Trim in/out handles (drag the bookend handles only)
         All pointer events are handled by custom logic — no <input type=range>.
       */}
       <div className="veditor-timeline">
