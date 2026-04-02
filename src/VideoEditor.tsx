@@ -41,24 +41,23 @@ type DragTarget = "start" | "end" | null;
 export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel }: Props) {
   const duration = info.duration_secs;
   const videoRef    = useRef<HTMLVideoElement>(null);
-  const timelineRef = useRef<HTMLDivElement>(null);
+  const trimWrapRef = useRef<HTMLDivElement>(null);
 
   const [playing,     setPlaying]     = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [trimStart,   setTrimStart]   = useState(0);
   const [trimEnd,     setTrimEnd]     = useState(duration);
 
-  // Mirror trim state into refs so pointer-move callbacks always read fresh
-  // values without needing to be re-created on every state change.
+  // Keep refs in sync so drag callbacks always read latest values
   const trimStartRef = useRef(0);
   const trimEndRef   = useRef(duration);
   useEffect(() => { trimStartRef.current = trimStart; }, [trimStart]);
   useEffect(() => { trimEndRef.current   = trimEnd;   }, [trimEnd]);
 
-  // Drag state stored in refs (no re-render on every mousemove)
-  const dragging    = useRef<DragTarget>(null);
-  const dragStartX  = useRef(0);
-  const dragStartTs = useRef(0);
+  // Drag state (no re-render on every pointermove)
+  const dragging      = useRef<DragTarget>(null);
+  const dragStartX    = useRef(0);
+  const dragStartVal  = useRef(0);
 
   // Audio tracks
   const defaultTracks = (
@@ -71,16 +70,14 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   }));
   const [tracks, setTracks] = useState(defaultTracks);
 
-  const isDark    = theme === "dark";
+  const isDark     = theme === "dark";
   const fillColor  = isDark ? "#888888" : "#555555";
   const emptyColor = isDark ? "#333336" : "#d0d0d0";
 
-  // ── video src via Tauri asset protocol ───────────────────────────────────
-  // convertFileSrc turns an absolute OS path into tauri://localhost/... so
-  // WKWebView / WebView2 can load it without CORS issues.
+  // No crossOrigin — tauri:// asset URLs don't support CORS and it breaks playback
   const videoSrc = convertFileSrc(filePath);
 
-  // ── sync playhead when video ticks ───────────────────────────────────────
+  // ── video event listeners ─────────────────────────────────────────────────
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -94,19 +91,17 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     };
     const onPlay  = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    v.addEventListener("timeupdate",    onTime);
-    v.addEventListener("play",          onPlay);
-    v.addEventListener("pause",         onPause);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("play",       onPlay);
+    v.addEventListener("pause",      onPause);
     return () => {
-      v.removeEventListener("timeupdate",    onTime);
-      v.removeEventListener("play",          onPlay);
-      v.removeEventListener("pause",         onPause);
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("play",       onPlay);
+      v.removeEventListener("pause",      onPause);
     };
-  // trimEndRef is a ref — only needs to run once on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── play / pause ─────────────────────────────────────────────────────────
+  // ── play / pause ──────────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -118,7 +113,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     }
   }, []);
 
-  // ── space bar ─────────────────────────────────────────────────────────────
+  // ── space bar ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
@@ -130,7 +125,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlay]);
 
-  // ── seek helper ──────────────────────────────────────────────────────────
+  // ── seek ──────────────────────────────────────────────────────────────────
   const seekTo = useCallback((t: number) => {
     const v = videoRef.current;
     if (!v) return;
@@ -139,66 +134,59 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     setCurrentTime(clamped);
   }, [duration]);
 
-  // ── pointer-event drag for trim handles ─────────────────────────────────
-  // THUMB_HIT: px radius around a handle centre that counts as a handle grab.
-  // Kept tight (10px) so bare-track clicks reliably seek instead of dragging.
-  const THUMB_HIT = 10;
+  // ── timeline pointer handlers ─────────────────────────────────────────────
+  //
+  // Strategy: pointer events are handled at the container level.
+  // The two thumb divs have data-handle="start" / data-handle="end" so we can
+  // detect whether the pointer went down ON a handle or on the bare track.
+  //
+  // - Bare track click  → seek
+  // - Handle drag       → move that trim point
+  //
+  const onTrimPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const wrap = trimWrapRef.current;
+    if (!wrap || duration <= 0) return;
 
-  const onTimelinePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const el = timelineRef.current;
-    if (!el || duration <= 0) return;
-    const rect   = el.getBoundingClientRect();
-    const ratio  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const clickT = ratio * duration;
-    const clickPx = ratio * rect.width;
+    // Check if the click target (or any ancestor up to the wrap) is a handle
+    const handleEl = (e.target as HTMLElement).closest<HTMLElement>("[data-handle]");
+    const handleId = handleEl?.dataset.handle as DragTarget | undefined;
 
-    // Use ref values so we always have the latest trim positions
-    const startPx = (trimStartRef.current / duration) * rect.width;
-    const endPx   = (trimEndRef.current   / duration) * rect.width;
-
-    const nearStart = Math.abs(clickPx - startPx) <= THUMB_HIT;
-    const nearEnd   = Math.abs(clickPx - endPx)   <= THUMB_HIT;
-
-    if (nearStart || nearEnd) {
-      // When both handles are within hit range pick by which side of the
-      // midpoint the click landed on.
-      const target: DragTarget = (nearStart && nearEnd)
-        ? (clickPx >= (startPx + endPx) / 2 ? "end" : "start")
-        : nearStart ? "start" : "end";
-
-      dragging.current    = target;
-      dragStartX.current  = e.clientX;
-      dragStartTs.current = target === "start" ? trimStartRef.current : trimEndRef.current;
-      el.setPointerCapture(e.pointerId);
-      e.stopPropagation();
+    if (handleId === "start" || handleId === "end") {
+      // ── Drag a handle ────────────────────────────────────────────────────
+      dragging.current     = handleId;
+      dragStartX.current   = e.clientX;
+      dragStartVal.current = handleId === "start" ? trimStartRef.current : trimEndRef.current;
+      wrap.setPointerCapture(e.pointerId);
+      e.preventDefault(); // don't let the browser do text-selection etc.
     } else {
-      // Bare track click → seek video to that position
-      seekTo(clickT);
+      // ── Bare track click → seek ──────────────────────────────────────────
+      const rect  = wrap.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      seekTo(ratio * duration);
     }
   }, [duration, seekTo]);
 
-  const onTimelinePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragging.current || !timelineRef.current || duration <= 0) return;
-    const rect = timelineRef.current.getBoundingClientRect();
+  const onTrimPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragging.current || !trimWrapRef.current || duration <= 0) return;
+    const rect = trimWrapRef.current.getBoundingClientRect();
     const dx   = e.clientX - dragStartX.current;
     const dt   = (dx / rect.width) * duration;
-    const newT = Math.max(0, Math.min(duration, dragStartTs.current + dt));
+    const newT = Math.max(0, Math.min(duration, dragStartVal.current + dt));
 
     if (dragging.current === "start") {
-      // Read trimEndRef so we never rely on a stale closure value
       setTrimStart(Math.min(newT, trimEndRef.current - 0.1));
     } else {
       setTrimEnd(Math.max(newT, trimStartRef.current + 0.1));
     }
   }, [duration]);
 
-  const onTimelinePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  const onTrimPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return;
-    timelineRef.current?.releasePointerCapture(e.pointerId);
+    trimWrapRef.current?.releasePointerCapture(e.pointerId);
     dragging.current = null;
   }, []);
 
-  // ── audio helpers ────────────────────────────────────────────────────────
+  // ── audio helpers ─────────────────────────────────────────────────────────
   const handleVolume  = (i: number, v: number) =>
     setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, volume: v } : t));
   const handleDelete  = (i: number) =>
@@ -213,7 +201,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     audioTracks: tracks.map(t => ({ index: t.index, volume: t.volume, deleted: t.deleted })),
   });
 
-  // ── derived layout percentages ────────────────────────────────────────────
+  // ── derived percentages ───────────────────────────────────────────────────
   const playPct  = duration > 0 ? (currentTime / duration) * 100 : 0;
   const startPct = duration > 0 ? (trimStart   / duration) * 100 : 0;
   const endPct   = duration > 0 ? (trimEnd     / duration) * 100 : 100;
@@ -232,12 +220,11 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
         <button className="veditor-close" onClick={onCancel} aria-label="Close">&times;</button>
       </div>
 
-      {/* ── VIDEO ─────────────────────────────────────────────────────── */}
+      {/* ── VIDEO ──────────────────────────────────────────────────────── */}
       <div className="veditor-video-wrap">
         <video
           ref={videoRef}
           src={videoSrc}
-          crossOrigin="anonymous"
           preload="auto"
           playsInline
           onLoadedMetadata={() => {
@@ -248,7 +235,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
         />
       </div>
 
-      {/* ── PLAYBACK BAR ─────────────────────────────────────────────── */}
+      {/* ── PLAYBACK CONTROLS ──────────────────────────────────────────── */}
       <div className="veditor-controls">
         <button
           className="veditor-play-btn"
@@ -266,78 +253,118 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
             </svg>
           )}
         </button>
+
         <span className="veditor-time">
           {fmtTime(currentTime)}&nbsp;/&nbsp;{fmtTime(duration)}
         </span>
-        <span className="veditor-time veditor-clip-len">
-          clip:&nbsp;{fmtTime(clipLen)}
+
+        {/* Scrub bar — mirrors the timeline but dedicated to playhead only */}
+        <div className="veditor-scrub-wrap">
+          <div className="veditor-scrub-track" />
+          <div
+            className="veditor-scrub-filled"
+            style={{ width: `${playPct}%` }}
+          />
+          <input
+            type="range"
+            className="veditor-scrub-input"
+            min={0}
+            max={duration}
+            step={0.01}
+            value={currentTime}
+            onChange={e => seekTo(Number(e.target.value))}
+            aria-label="Seek"
+          />
+        </div>
+
+        <span className="veditor-time veditor-clip-len" style={{ opacity: 0.6, fontSize: 10 }}>
+          clip&nbsp;{fmtTime(clipLen)}
         </span>
       </div>
 
-      {/* ── UNIFIED TIMELINE ─────────────────────────────────────────── */}
-      {/*
-        Single timeline bar that combines:
-          • Playhead scrub (click bare track → seek)
-          • Trim in/out handles (drag the bookend handles only)
-        All pointer events are handled by custom logic — no <input type=range>.
-      */}
+      {/* ── UNIFIED TRIM TIMELINE ──────────────────────────────────────── */}
       <div className="veditor-timeline">
-        <div className="veditor-timeline-labels">
-          <span className="veditor-section-label">Timeline</span>
-          <span className="veditor-trim-stamps">
-            <span>{fmtTime(trimStart)}</span>
-            <span style={{ color: "var(--text-faint)" }}>–</span>
-            <span>{fmtTime(trimEnd)}</span>
+        {/* Label row */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span className="veditor-section-label">Trim</span>
+          <span style={{ fontSize: 10, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+            {fmtTime(trimStart)}&nbsp;–&nbsp;{fmtTime(trimEnd)}
           </span>
         </div>
 
-        {/* The interactive track */}
-        <div
-          ref={timelineRef}
-          className="veditor-track-container"
-          onPointerDown={onTimelinePointerDown}
-          onPointerMove={onTimelinePointerMove}
-          onPointerUp={onTimelinePointerUp}
-          onPointerCancel={onTimelinePointerUp}
-        >
-          {/* Base rail */}
-          <div className="veditor-rail" />
+        {/*
+          The trim row: start time | [track with handles] | end time
+          Pointer events are on the track wrapper only.
+          Handles have data-handle attribute so we can detect them.
+        */}
+        <div className="veditor-trim-row">
+          <span className="veditor-trim-time">{fmtTime(trimStart)}</span>
 
-          {/* Dim region before trimStart */}
-          <div className="veditor-rail-dim" style={{ left: 0, width: `${startPct}%` }} />
-
-          {/* Active (selected) region */}
-          <div className="veditor-rail-active"
-            style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }} />
-
-          {/* Dim region after trimEnd */}
-          <div className="veditor-rail-dim" style={{ left: `${endPct}%`, right: 0 }} />
-
-          {/* Playhead needle */}
-          <div className="veditor-playhead" style={{ left: `${playPct}%` }} />
-
-          {/* Trim start handle */}
           <div
-            className="veditor-trim-handle veditor-trim-handle-start"
-            style={{ left: `${startPct}%` }}
-            title="Drag to set clip start"
-          />
+            ref={trimWrapRef}
+            className="veditor-trim-wrap"
+            style={{ cursor: "pointer" }}
+            onPointerDown={onTrimPointerDown}
+            onPointerMove={onTrimPointerMove}
+            onPointerUp={onTrimPointerUp}
+            onPointerCancel={onTrimPointerUp}
+          >
+            {/* Base rail */}
+            <div className="veditor-trim-track" />
 
-          {/* Trim end handle */}
-          <div
-            className="veditor-trim-handle veditor-trim-handle-end"
-            style={{ left: `${endPct}%` }}
-            title="Drag to set clip end"
-          />
+            {/* Active region between handles */}
+            <div
+              className="veditor-trim-active"
+              style={{
+                left:  `${startPct}%`,
+                width: `${endPct - startPct}%`,
+              }}
+            />
+
+            {/* Playhead needle */}
+            <div
+              style={{
+                position:  "absolute",
+                left:      `${playPct}%`,
+                top:       "50%",
+                transform: "translate(-50%, -50%)",
+                width:     2,
+                height:    18,
+                background: "var(--text-muted)",
+                borderRadius: 1,
+                pointerEvents: "none",
+                opacity: 0.7,
+              }}
+            />
+
+            {/* Start handle */}
+            <div
+              data-handle="start"
+              className="veditor-trim-thumb"
+              style={{ left: `${startPct}%`, cursor: "ew-resize" }}
+              title="Drag to set clip start"
+            />
+
+            {/* End handle */}
+            <div
+              data-handle="end"
+              className="veditor-trim-thumb"
+              style={{ left: `${endPct}%`, cursor: "ew-resize" }}
+              title="Drag to set clip end"
+            />
+          </div>
+
+          <span className="veditor-trim-time end">{fmtTime(trimEnd)}</span>
         </div>
 
-        <div className="veditor-timeline-edge-labels">
-          <span>{fmtTime(0)}</span>
-          <span>{fmtTime(duration)}</span>
+        {/* Edge labels */}
+        <div style={{ display: "flex", justifyContent: "space-between", paddingInline: "54px" }}>
+          <span style={{ fontSize: 9, color: "var(--text-faint)" }}>{fmtTime(0)}</span>
+          <span style={{ fontSize: 9, color: "var(--text-faint)" }}>{fmtTime(duration)}</span>
         </div>
       </div>
 
-      {/* ── AUDIO TRACKS ─────────────────────────────────────────────── */}
+      {/* ── AUDIO TRACKS ───────────────────────────────────────────────── */}
       {tracks.length > 0 && (
         <div className="veditor-audio">
           <span className="veditor-section-label">Audio Tracks</span>
@@ -384,7 +411,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
         </div>
       )}
 
-      {/* ── FOOTER ───────────────────────────────────────────────────── */}
+      {/* ── FOOTER ─────────────────────────────────────────────────────── */}
       <div className="veditor-footer">
         <span className="veditor-trim-summary">
           {fmtTime(trimStart)} – {fmtTime(trimEnd)}
