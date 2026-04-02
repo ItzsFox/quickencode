@@ -135,8 +135,6 @@ pub struct EncodeProgress {
 // ── get_video_info ───────────────────────────────────────────────────────────
 
 /// Returns a human-readable label for an audio stream.
-/// Falls back to "Track N" when the tag is missing, empty, or "und" (ISO 639
-/// undetermined — common in game capture files like Fortnite DVR).
 fn audio_label(stream: &serde_json::Value, one_based_index: usize) -> String {
     let title = stream["tags"]["title"].as_str().unwrap_or("").trim().to_string();
     if !title.is_empty() && title.to_lowercase() != "und" {
@@ -300,6 +298,23 @@ pub async fn get_encoded_frame(
 }
 
 // ── encode_video_with_progress ───────────────────────────────────────────────
+//
+// BUG FIXES vs previous version:
+//
+// 1. -to was being passed as the absolute end timestamp (e.g. 45.0 seconds
+//    into the file) when -ss is placed BEFORE -input. When -ss precedes -i,
+//    ffmpeg resets the input clock to 0, so -to must be the DURATION of the
+//    desired clip, not the absolute end time.  We now compute:
+//      clip_duration = trim_end - trim_start  and pass  -t <clip_duration>
+//    instead of  -to <trim_end>.
+//
+// 2. active_audio was built from a hardcoded range 0..16, causing ffmpeg to
+//    try mapping non-existent audio streams 2-15, which made it error out
+//    (producing a 0-byte file).  We now only map streams 0..(total_audio_tracks
+//    as supplied by the caller), falling back to 1 if none are specified.
+//
+// 3. Pass 1 now pipes stderr so we can read out_time_ms lines and emit
+//    real 0-50% progress instead of jumping straight to 50%.
 
 #[tauri::command]
 pub async fn encode_video_with_progress(
@@ -314,7 +329,10 @@ pub async fn encode_video_with_progress(
     trim_start: Option<f64>,
     trim_end: Option<f64>,
     deleted_tracks: Vec<usize>,
+    // Keys are 0-based audio stream indices; values are volume percent (100 = unchanged).
     volume_map: HashMap<usize, u32>,
+    // Total number of audio streams in the source file — used to build valid -map args.
+    total_audio_tracks: usize,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg      = resolve_bin(&app, "ffmpeg")?;
@@ -323,14 +341,22 @@ pub async fn encode_video_with_progress(
         let passlog     = std::env::temp_dir().join("qe_passlog");
         let passlog_str = passlog.to_str().unwrap().to_string();
 
-        let mut trim_args: Vec<String> = vec![];
-        if let Some(ss) = trim_start {
-            if ss > 0.0 {
-                trim_args.extend(["-ss".into(), format!("{ss:.3}")]);
-            }
-        }
-        let to_val: Option<String> = trim_end.map(|te| format!("{te:.3}"));
+        // ── Trim args ─────────────────────────────────────────────────────
+        // When -ss is placed BEFORE -i the input clock resets to 0, so we
+        // must use -t <duration> rather than -to <absolute_end_time>.
+        let ss_val: Option<f64> = trim_start.filter(|&v| v > 0.0);
+        let clip_duration: Option<f64> = match (trim_start, trim_end) {
+            (Some(ss), Some(te)) if te > ss => Some(te - ss),
+            (None,     Some(te))            => Some(te),
+            _                               => None,
+        };
 
+        let mut trim_args: Vec<String> = vec![];
+        if let Some(ss) = ss_val {
+            trim_args.extend(["-ss".into(), format!("{ss:.6}")]);
+        }
+
+        // ── Video filter ─────────────────────────────────────────────────
         let mut vf_parts: Vec<String> = vec![];
         match resolution.as_str() {
             "1080p" => vf_parts.push("scale=-2:1080".into()),
@@ -339,13 +365,16 @@ pub async fn encode_video_with_progress(
             _       => {}
         }
         if fps != "original" { vf_parts.push(format!("fps={}", fps)); }
-
         let vf_arg: Vec<String> = if !vf_parts.is_empty() {
             vec!["-vf".into(), vf_parts.join(",")]
         } else { vec![] };
 
-        let max_audio = 16usize;
-        let active_audio: Vec<usize> = (0..max_audio)
+        // ── Active audio streams ──────────────────────────────────────────
+        // Only consider streams that actually exist in the source.
+        // Fall back to treating the file as having 1 audio stream if the
+        // caller didn't provide a count (shouldn't happen but is safe).
+        let real_track_count = if total_audio_tracks == 0 { 1 } else { total_audio_tracks };
+        let active_audio: Vec<usize> = (0..real_track_count)
             .filter(|i| !deleted_tracks.contains(i))
             .collect();
 
@@ -360,8 +389,8 @@ pub async fn encode_video_with_progress(
 
         let mut pass1: Vec<String> = trim_args.clone();
         pass1.extend(["-y".into(), "-i".into(), input.clone()]);
-        if let Some(ref to) = to_val {
-            pass1.extend(["-to".into(), to.clone()]);
+        if let Some(dur) = clip_duration {
+            pass1.extend(["-t".into(), format!("{dur:.6}")]);
         }
         pass1.extend(vf_arg.clone());
         pass1.extend([
@@ -369,13 +398,45 @@ pub async fn encode_video_with_progress(
             "-b:v".into(), video_bv.clone(),
             "-pass".into(), "1".into(),
             "-passlogfile".into(), passlog_str.clone(),
+            "-progress".into(), "pipe:1".into(),
+            "-nostats".into(),
             "-an".into(), "-f".into(), "null".into(),
             #[cfg(target_os = "windows")] "NUL".into(),
             #[cfg(not(target_os = "windows"))] "/dev/null".into(),
         ]);
-        let s1 = Command::new(&ffmpeg).args(&pass1)
-            .no_window().stderr(Stdio::null())
-            .status().map_err(|e| e.to_string())?;
+
+        let mut child1 = Command::new(&ffmpeg)
+            .args(&pass1)
+            .no_window()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn().map_err(|e| e.to_string())?;
+
+        let stdout1    = child1.stdout.take().unwrap();
+        let reader1    = BufReader::new(stdout1);
+        let start1     = std::time::Instant::now();
+        let mut last_pct1 = 0.0f64;
+        for line in reader1.lines().flatten() {
+            if let Some(rest) = line.strip_prefix("out_time_ms=") {
+                if let Ok(ms) = rest.trim().parse::<f64>() {
+                    if ms <= 0.0 { continue; }
+                    let secs_done = ms / 1_000_000.0;
+                    let pct       = (secs_done / duration_secs).min(1.0) * 50.0;
+                    let elapsed   = start1.elapsed().as_secs_f64();
+                    let fraction  = pct / 50.0;
+                    let eta       = if fraction > 0.02 {
+                        (elapsed / fraction) * (1.0 - fraction) + 1.0 // +1 for pass 2
+                    } else { 0.0 };
+                    if pct - last_pct1 >= 0.5 {
+                        last_pct1 = pct;
+                        let _ = app.emit("encode-progress", EncodeProgress {
+                            percent: pct.min(49.0), eta_secs: eta, pass: 1,
+                        });
+                    }
+                }
+            }
+        }
+        let s1 = child1.wait().map_err(|e| e.to_string())?;
         if !s1.success() { return Err("FFmpeg pass 1 failed".into()); }
 
         // ── Pass 2 ─────────────────────────────────────────────────────────
@@ -389,8 +450,8 @@ pub async fn encode_video_with_progress(
             "-progress".into(), "pipe:1".into(),
             "-nostats".into(),
         ]);
-        if let Some(ref to) = to_val {
-            pass2.extend(["-to".into(), to.clone()]);
+        if let Some(dur) = clip_duration {
+            pass2.extend(["-t".into(), format!("{dur:.6}")]);
         }
         pass2.extend(vf_arg);
         pass2.extend(["-map".into(), "0:v:0".into()]);
@@ -405,12 +466,16 @@ pub async fn encode_video_with_progress(
                 filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
                 out_labels.push(format!("[{label}]"));
             }
-            pass2.extend(["-filter_complex".into(), filter_parts.join(";")]);
-            for label in &out_labels {
-                pass2.extend(["-map".into(), label.clone()]);
+            if !filter_parts.is_empty() {
+                pass2.extend(["-filter_complex".into(), filter_parts.join(";")]);
+                for label in &out_labels {
+                    pass2.extend(["-map".into(), label.clone()]);
+                }
             }
         } else {
             for &ai in &active_audio {
+                // The ? suffix makes ffmpeg skip the stream silently if it
+                // doesn't exist, instead of erroring out.
                 pass2.extend(["-map".into(), format!("0:a:{ai}?")]);
             }
         }
