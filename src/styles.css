@@ -621,22 +621,7 @@ body {
 
 /* ══════════════════════════════════════════
    PREVIEW
-   ══════════════════════════════════════════
-
-   Layout contract
-   ───────────────
-   .preview-section  — the 1fr cell in .editor's grid; clips overflow.
-   .preview-scaler   — flex-column: grid gets flex:1, frame-nav is a
-                       fixed-height flex-shrink:0 footer. Together they
-                       fill preview-section without ever overflowing.
-   .preview-grid     — the two side-by-side frames. flex:1 + min-height:0
-                       so it never pushes past its allocated space.
-                       align-items:stretch lets each column fill the height.
-   .preview-side     — aspect-ratio box. width=100% of its column; height
-                       is naturally derived by aspect-ratio but capped at
-                       100% of the grid's height so tall videos never
-                       overflow and push frame-nav off screen.
-*/
+   ══════════════════════════════════════════ */
 
 .preview-section {
   min-height: 0;
@@ -660,8 +645,6 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  /* stretch so columns fill available height; combined with max-height:100%
-     on .preview-side this creates a height ceiling for tall videos */
   align-items: stretch;
   overflow: hidden;
 }
@@ -674,13 +657,7 @@ body {
   border: 1px solid var(--border);
   cursor: pointer;
   width: 100%;
-  /*
-   * aspect-ratio (set via JSX inline style) provides the natural size.
-   * max-height:100% caps growth at whatever height the grid cell provides,
-   * so a 9:16 video won't push the frame-nav off the bottom of the window.
-   * margin:auto centers the box vertically when it's shorter than the cell.
-   */
-  aspect-ratio: var(--preview-aspect, 16/9); /* fallback; overridden by inline style */
+  aspect-ratio: var(--preview-aspect, 16/9);
   max-height: 100%;
   max-width: 100%;
   height: auto;
@@ -746,11 +723,6 @@ body {
 }
 .preview-loading span { font-size: 11px; color: var(--text-dim); }
 
-/*
- * frame-nav: always a fixed-height footer.
- * flex-shrink:0 is the critical rule — it prevents the nav from being
- * compressed or pushed off screen regardless of how tall the preview is.
- */
 .frame-nav {
   display: flex;
   align-items: center;
@@ -1102,3 +1074,355 @@ select:focus { border-color: var(--text-dim); }
   transition: border-color 0.14s, color 0.14s;
 }
 .batch-add-btn:hover { border-color: var(--text-dim); color: var(--text); }
+
+/* ══════════════════════════════════════════
+   VIDEO EDITOR MODAL
+   ══════════════════════════════════════════ */
+.veditor-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+.veditor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.veditor-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.veditor-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.1px;
+}
+.veditor-filename {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 500;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.veditor-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.veditor-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  transition: color 0.14s, border-color 0.14s, background 0.14s;
+}
+.veditor-close:hover { color: var(--text-muted); border-color: var(--border-2); background: var(--surface-2); }
+
+/* Video area */
+.veditor-video-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  position: relative;
+}
+.veditor-video-wrap video {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  outline: none;
+}
+
+/* Playback controls bar */
+.veditor-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.veditor-play-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--text);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.14s;
+}
+.veditor-play-btn:hover { opacity: 0.8; }
+.veditor-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 100px;
+  text-align: center;
+}
+/* Scrub bar sits in a flex:1 container */
+.veditor-scrub-wrap {
+  flex: 1;
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+}
+.veditor-scrub-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--surface-3);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.veditor-scrub-filled {
+  position: absolute;
+  left: 0;
+  height: 3px;
+  background: var(--text-muted);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.veditor-scrub-input {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 20px;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Timeline / trim area */
+.veditor-timeline {
+  flex-shrink: 0;
+  padding: 10px 16px 8px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.veditor-section-label {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.veditor-trim-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.veditor-trim-time {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 44px;
+}
+.veditor-trim-time.end { text-align: right; }
+
+/* The trim range — a double-thumb range rendered via two overlapping inputs */
+.veditor-trim-wrap {
+  flex: 1;
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+}
+.veditor-trim-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--surface-3);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.veditor-trim-active {
+  position: absolute;
+  height: 4px;
+  background: var(--text-muted);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.veditor-trim-input {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 20px;
+  opacity: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  margin: 0;
+  padding: 0;
+}
+/* Visible thumb replacements */
+.veditor-trim-thumb {
+  position: absolute;
+  width: 12px;
+  height: 18px;
+  background: var(--text);
+  border-radius: 3px;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  border: 2px solid var(--bg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Audio tracks panel */
+.veditor-audio {
+  flex-shrink: 0;
+  padding: 8px 16px 10px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.veditor-audio::-webkit-scrollbar { width: 3px; }
+.veditor-audio::-webkit-scrollbar-track { background: transparent; }
+.veditor-audio::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
+
+.veditor-track-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.veditor-track-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 80px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.veditor-track-vol-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.veditor-track-vol-pct {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: right;
+}
+.veditor-track-delete {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 11px;
+  transition: color 0.14s, border-color 0.14s, background 0.14s;
+  flex-shrink: 0;
+}
+.veditor-track-delete:hover { color: var(--error); border-color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface)); }
+.veditor-track-deleted {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.veditor-track-restore {
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+  pointer-events: auto;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.veditor-track-restore:hover { color: var(--text-muted); }
+
+/* Footer confirm */
+.veditor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.veditor-trim-summary {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.veditor-cancel {
+  padding: 6px 16px;
+  background: none;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.veditor-cancel:hover { border-color: var(--text-dim); color: var(--text); background: var(--surface-2); }
+.veditor-confirm {
+  padding: 6px 20px;
+  background: var(--encode-bg);
+  color: var(--encode-text);
+  border: none;
+  border-radius: var(--radius-pill);
+  font-size: 12.5px;
+  font-family: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.14s;
+}
+.veditor-confirm:hover { opacity: 0.82; }
