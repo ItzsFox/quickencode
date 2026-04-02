@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { VideoInfo, VideoEdits, AudioTrackInfo } from "./types";
+import { VideoInfo, VideoEdits } from "./types";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 function fmtTime(s: number) {
@@ -35,29 +35,28 @@ interface Props {
   onCancel:  () => void;
 }
 
-type DragTarget = "start" | "end" | null;
+// Hit radius in px for grabbing a trim handle
+const HANDLE_HIT_PX = 18;
 
 // ── component ──────────────────────────────────────────────────────────────
 export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel }: Props) {
-  const duration = info.duration_secs;
+  const duration    = info.duration_secs;
   const videoRef    = useRef<HTMLVideoElement>(null);
-  const trimWrapRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
 
   const [playing,     setPlaying]     = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [trimStart,   setTrimStart]   = useState(0);
   const [trimEnd,     setTrimEnd]     = useState(duration);
 
-  // Keep refs in sync so drag callbacks always read latest values
+  // Keep mutable refs in sync so callbacks never close over stale values
   const trimStartRef = useRef(0);
   const trimEndRef   = useRef(duration);
   useEffect(() => { trimStartRef.current = trimStart; }, [trimStart]);
   useEffect(() => { trimEndRef.current   = trimEnd;   }, [trimEnd]);
 
-  // Drag state (no re-render on every pointermove)
-  const dragging      = useRef<DragTarget>(null);
-  const dragStartX    = useRef(0);
-  const dragStartVal  = useRef(0);
+  // Drag state — stored in refs to avoid re-renders on every pointermove
+  const dragging = useRef<"start" | "end" | null>(null);
 
   // Audio tracks
   const defaultTracks = (
@@ -74,10 +73,16 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const fillColor  = isDark ? "#888888" : "#555555";
   const emptyColor = isDark ? "#333336" : "#d0d0d0";
 
-  // No crossOrigin — tauri:// asset URLs don't support CORS and it breaks playback
+  // Tauri asset URL — no crossOrigin to avoid CORS issues on tauri:// protocol
   const videoSrc = convertFileSrc(filePath);
 
-  // ── video event listeners ─────────────────────────────────────────────────
+  // Force reload when src changes
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v) v.load();
+  }, [videoSrc]);
+
+  // ── Pause at trimEnd & track currentTime ───────────────────────────────
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -101,7 +106,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     };
   }, []);
 
-  // ── play / pause ──────────────────────────────────────────────────────────
+  // ── Play / pause ───────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -113,7 +118,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     }
   }, []);
 
-  // ── space bar ──────────────────────────────────────────────────────────────
+  // ── Space bar ──────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
@@ -125,68 +130,72 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlay]);
 
-  // ── seek ──────────────────────────────────────────────────────────────────
-  const seekTo = useCallback((t: number) => {
-    const v = videoRef.current;
-    if (!v) return;
-    const clamped = Math.max(0, Math.min(duration, t));
-    v.currentTime = clamped;
-    setCurrentTime(clamped);
+  // ── Timeline pointer helpers ───────────────────────────────────────────
+  const pxToTime = useCallback((clientX: number): number => {
+    const el = timelineRef.current;
+    if (!el || duration <= 0) return 0;
+    const rect  = el.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return ratio * duration;
   }, [duration]);
 
-  // ── timeline pointer handlers ─────────────────────────────────────────────
-  //
-  // Strategy: pointer events are handled at the container level.
-  // The two thumb divs have data-handle="start" / data-handle="end" so we can
-  // detect whether the pointer went down ON a handle or on the bare track.
-  //
-  // - Bare track click  → seek
-  // - Handle drag       → move that trim point
-  //
-  const onTrimPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const wrap = trimWrapRef.current;
-    if (!wrap || duration <= 0) return;
+  const onTimelinePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const el = timelineRef.current;
+    if (!el || duration <= 0) return;
 
-    // Check if the click target (or any ancestor up to the wrap) is a handle
-    const handleEl = (e.target as HTMLElement).closest<HTMLElement>("[data-handle]");
-    const handleId = handleEl?.dataset.handle as DragTarget | undefined;
+    const rect    = el.getBoundingClientRect();
+    const clickPx = e.clientX - rect.left;
+    const trackW  = rect.width;
+    const startPx = (trimStartRef.current / duration) * trackW;
+    const endPx   = (trimEndRef.current   / duration) * trackW;
 
-    if (handleId === "start" || handleId === "end") {
-      // ── Drag a handle ────────────────────────────────────────────────────
-      dragging.current     = handleId;
-      dragStartX.current   = e.clientX;
-      dragStartVal.current = handleId === "start" ? trimStartRef.current : trimEndRef.current;
-      wrap.setPointerCapture(e.pointerId);
-      e.preventDefault(); // don't let the browser do text-selection etc.
+    const nearStart = Math.abs(clickPx - startPx) <= HANDLE_HIT_PX;
+    const nearEnd   = Math.abs(clickPx - endPx)   <= HANDLE_HIT_PX;
+
+    if (nearStart || nearEnd) {
+      let which: "start" | "end";
+      if (nearStart && nearEnd) {
+        which = clickPx <= (startPx + endPx) / 2 ? "start" : "end";
+      } else {
+        which = nearStart ? "start" : "end";
+      }
+      dragging.current = which;
+      el.setPointerCapture(e.pointerId);
+      e.preventDefault();
     } else {
-      // ── Bare track click → seek ──────────────────────────────────────────
-      const rect  = wrap.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      seekTo(ratio * duration);
+      // Bare track click → seek (clamped to trim region)
+      const t     = pxToTime(e.clientX);
+      const seekT = Math.max(trimStartRef.current, Math.min(trimEndRef.current, t));
+      if (videoRef.current) videoRef.current.currentTime = seekT;
+      setCurrentTime(seekT);
     }
-  }, [duration, seekTo]);
+  }, [duration, pxToTime]);
 
-  const onTrimPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragging.current || !trimWrapRef.current || duration <= 0) return;
-    const rect = trimWrapRef.current.getBoundingClientRect();
-    const dx   = e.clientX - dragStartX.current;
-    const dt   = (dx / rect.width) * duration;
-    const newT = Math.max(0, Math.min(duration, dragStartVal.current + dt));
-
-    if (dragging.current === "start") {
-      setTrimStart(Math.min(newT, trimEndRef.current - 0.1));
-    } else {
-      setTrimEnd(Math.max(newT, trimStartRef.current + 0.1));
-    }
-  }, [duration]);
-
-  const onTrimPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  const onTimelinePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return;
-    trimWrapRef.current?.releasePointerCapture(e.pointerId);
-    dragging.current = null;
+    const t = pxToTime(e.clientX);
+    if (dragging.current === "start") {
+      const clamped = Math.max(0, Math.min(t, trimEndRef.current - 0.1));
+      setTrimStart(clamped);
+      if (videoRef.current && videoRef.current.currentTime < clamped) {
+        videoRef.current.currentTime = clamped;
+        setCurrentTime(clamped);
+      }
+    } else {
+      const clamped = Math.max(trimStartRef.current + 0.1, Math.min(t, duration));
+      setTrimEnd(clamped);
+    }
+  }, [duration, pxToTime]);
+
+  const onTimelinePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragging.current) {
+      timelineRef.current?.releasePointerCapture(e.pointerId);
+      dragging.current = null;
+    }
   }, []);
 
-  // ── audio helpers ─────────────────────────────────────────────────────────
+  // ── Audio helpers ──────────────────────────────────────────────────────
   const handleVolume  = (i: number, v: number) =>
     setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, volume: v } : t));
   const handleDelete  = (i: number) =>
@@ -194,18 +203,18 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const handleRestore = (i: number) =>
     setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, deleted: false } : t));
 
-  // ── confirm ───────────────────────────────────────────────────────────────
+  // ── Confirm ────────────────────────────────────────────────────────────
   const confirm = () => onConfirm({
     trimStart,
     trimEnd,
     audioTracks: tracks.map(t => ({ index: t.index, volume: t.volume, deleted: t.deleted })),
   });
 
-  // ── derived percentages ───────────────────────────────────────────────────
-  const playPct  = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const startPct = duration > 0 ? (trimStart   / duration) * 100 : 0;
-  const endPct   = duration > 0 ? (trimEnd     / duration) * 100 : 100;
-  const clipLen  = trimEnd - trimStart;
+  // ── Derived percentages ────────────────────────────────────────────────
+  const playPct   = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const startPct  = duration > 0 ? (trimStart   / duration) * 100 : 0;
+  const endPct    = duration > 0 ? (trimEnd     / duration) * 100 : 100;
+  const clipLen   = trimEnd - trimStart;
 
   return (
     <div className="veditor-overlay">
@@ -217,12 +226,15 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           <span className="veditor-title">Video Editor</span>
           <span className="veditor-filename">{basename(filePath)}</span>
         </div>
-        <button className="veditor-close" onClick={onCancel} aria-label="Close">&times;</button>
+        <div className="veditor-header-right">
+          <button className="veditor-close" onClick={onCancel} aria-label="Close editor">&times;</button>
+        </div>
       </div>
 
       {/* ── VIDEO ──────────────────────────────────────────────────────── */}
       <div className="veditor-video-wrap">
         <video
+          key={videoSrc}
           ref={videoRef}
           src={videoSrc}
           preload="auto"
@@ -258,109 +270,62 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           {fmtTime(currentTime)}&nbsp;/&nbsp;{fmtTime(duration)}
         </span>
 
-        {/* Scrub bar — mirrors the timeline but dedicated to playhead only */}
-        <div className="veditor-scrub-wrap">
-          <div className="veditor-scrub-track" />
-          <div
-            className="veditor-scrub-filled"
-            style={{ width: `${playPct}%` }}
-          />
-          <input
-            type="range"
-            className="veditor-scrub-input"
-            min={0}
-            max={duration}
-            step={0.01}
-            value={currentTime}
-            onChange={e => seekTo(Number(e.target.value))}
-            aria-label="Seek"
-          />
+        {/* ── Unified trim timeline ── */}
+        <div
+          ref={timelineRef}
+          className="veditor-timeline-track"
+          onPointerDown={onTimelinePointerDown}
+          onPointerMove={onTimelinePointerMove}
+          onPointerUp={onTimelinePointerUp}
+          onPointerCancel={onTimelinePointerUp}
+        >
+          {/* Base rail */}
+          <div className="vtl-bg" />
+
+          {/* Dimmed regions outside the trim window */}
+          <div className="vtl-dim" style={{ left: 0, width: `${startPct}%` }} />
+          <div className="vtl-dim" style={{ left: `${endPct}%`, right: 0 }} />
+
+          {/* Active (in-trim) region */}
+          <div className="vtl-active" style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }} />
+
+          {/* Playhead */}
+          <div className="vtl-playhead" style={{ left: `${playPct}%` }} />
+
+          {/* Trim start handle */}
+          <div className="vtl-handle vtl-handle-start" style={{ left: `${startPct}%` }}>
+            <div className="vtl-handle-bar" />
+            <div className="vtl-handle-time">{fmtTime(trimStart)}</div>
+          </div>
+
+          {/* Trim end handle */}
+          <div className="vtl-handle vtl-handle-end" style={{ left: `${endPct}%` }}>
+            <div className="vtl-handle-bar" />
+            <div className="vtl-handle-time">{fmtTime(trimEnd)}</div>
+          </div>
         </div>
 
-        <span className="veditor-time veditor-clip-len" style={{ opacity: 0.6, fontSize: 10 }}>
+        <span className="veditor-time" style={{ opacity: 0.6, fontSize: 10 }}>
           clip&nbsp;{fmtTime(clipLen)}
         </span>
       </div>
 
-      {/* ── UNIFIED TRIM TIMELINE ──────────────────────────────────────── */}
-      <div className="veditor-timeline">
-        {/* Label row */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span className="veditor-section-label">Trim</span>
-          <span style={{ fontSize: 10, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
-            {fmtTime(trimStart)}&nbsp;–&nbsp;{fmtTime(trimEnd)}
-          </span>
-        </div>
-
-        {/*
-          The trim row: start time | [track with handles] | end time
-          Pointer events are on the track wrapper only.
-          Handles have data-handle attribute so we can detect them.
-        */}
-        <div className="veditor-trim-row">
-          <span className="veditor-trim-time">{fmtTime(trimStart)}</span>
-
-          <div
-            ref={trimWrapRef}
-            className="veditor-trim-wrap"
-            style={{ cursor: "pointer" }}
-            onPointerDown={onTrimPointerDown}
-            onPointerMove={onTrimPointerMove}
-            onPointerUp={onTrimPointerUp}
-            onPointerCancel={onTrimPointerUp}
-          >
-            {/* Base rail */}
-            <div className="veditor-trim-track" />
-
-            {/* Active region between handles */}
-            <div
-              className="veditor-trim-active"
-              style={{
-                left:  `${startPct}%`,
-                width: `${endPct - startPct}%`,
-              }}
-            />
-
-            {/* Playhead needle */}
-            <div
-              style={{
-                position:  "absolute",
-                left:      `${playPct}%`,
-                top:       "50%",
-                transform: "translate(-50%, -50%)",
-                width:     2,
-                height:    18,
-                background: "var(--text-muted)",
-                borderRadius: 1,
-                pointerEvents: "none",
-                opacity: 0.7,
-              }}
-            />
-
-            {/* Start handle */}
-            <div
-              data-handle="start"
-              className="veditor-trim-thumb"
-              style={{ left: `${startPct}%`, cursor: "ew-resize" }}
-              title="Drag to set clip start"
-            />
-
-            {/* End handle */}
-            <div
-              data-handle="end"
-              className="veditor-trim-thumb"
-              style={{ left: `${endPct}%`, cursor: "ew-resize" }}
-              title="Drag to set clip end"
-            />
-          </div>
-
-          <span className="veditor-trim-time end">{fmtTime(trimEnd)}</span>
-        </div>
-
-        {/* Edge labels */}
-        <div style={{ display: "flex", justifyContent: "space-between", paddingInline: "54px" }}>
-          <span style={{ fontSize: 9, color: "var(--text-faint)" }}>{fmtTime(0)}</span>
-          <span style={{ fontSize: 9, color: "var(--text-faint)" }}>{fmtTime(duration)}</span>
+      {/* ── VIDEO TRACK LABEL ──────────────────────────────────────────── */}
+      <div className="veditor-track-section">
+        <span className="veditor-section-label">Video Track</span>
+        <div className="veditor-video-track-row">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.6 }}>
+            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+            <line x1="7" y1="2" x2="7" y2="22"/>
+            <line x1="17" y1="2" x2="17" y2="22"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+            <line x1="2" y1="7" x2="7" y2="7"/>
+            <line x1="2" y1="17" x2="7" y2="17"/>
+            <line x1="17" y1="17" x2="22" y2="17"/>
+            <line x1="17" y1="7" x2="22" y2="7"/>
+          </svg>
+          <span className="veditor-track-label">{basename(filePath)}</span>
+          <span className="veditor-track-vol-pct" style={{ marginLeft: "auto" }}>{fmtTime(clipLen)}</span>
         </div>
       </div>
 
@@ -370,6 +335,11 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           <span className="veditor-section-label">Audio Tracks</span>
           {tracks.map((t, i) => (
             <div key={t.index} className={`veditor-track-row${t.deleted ? " veditor-track-deleted" : ""}`}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.5 }}>
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                {!t.deleted && t.volume > 0 && <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>}
+                {!t.deleted && t.volume > 0 && <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>}
+              </svg>
               <span className="veditor-track-label" title={t.label}>{t.label}</span>
 
               {t.deleted ? (
@@ -381,6 +351,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
                     value={t.volume}
                     style={{ background: sliderBg(t.volume, 0, 200, fillColor, emptyColor), flex: 1 }}
                     onChange={e => handleVolume(i, Number(e.target.value))}
+                    aria-label={`Volume for ${t.label}`}
                   />
                   <span className="veditor-track-vol-pct">{t.volume}%</span>
                 </div>
@@ -389,8 +360,8 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
               <button
                 className="veditor-track-delete"
                 onClick={() => t.deleted ? handleRestore(i) : handleDelete(i)}
-                title={t.deleted ? "Restore" : "Remove track"}
-                aria-label={t.deleted ? "Restore" : "Remove track"}
+                title={t.deleted ? "Restore track" : "Remove track"}
+                aria-label={t.deleted ? "Restore track" : "Remove track"}
               >
                 {t.deleted ? (
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
