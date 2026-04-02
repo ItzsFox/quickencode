@@ -134,6 +134,21 @@ pub struct EncodeProgress {
 
 // ── get_video_info ───────────────────────────────────────────────────────────
 
+/// Returns a human-readable label for an audio stream.
+/// Falls back to "Track N" when the tag is missing, empty, or "und" (ISO 639
+/// undetermined — common in game capture files like Fortnite DVR).
+fn audio_label(stream: &serde_json::Value, one_based_index: usize) -> String {
+    let title = stream["tags"]["title"].as_str().unwrap_or("").trim().to_string();
+    if !title.is_empty() && title.to_lowercase() != "und" {
+        return title;
+    }
+    let lang = stream["tags"]["language"].as_str().unwrap_or("").trim().to_string();
+    if !lang.is_empty() && lang.to_lowercase() != "und" {
+        return lang;
+    }
+    format!("Track {}", one_based_index)
+}
+
 #[tauri::command]
 pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo, String> {
     let ffprobe = resolve_bin(&app, "ffprobe")?;
@@ -182,14 +197,8 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
     let audio_tracks: Vec<AudioTrackInfo> = audio_streams
         .map(|arr| arr.iter().enumerate().map(|(i, s)| {
             let lang  = s["tags"]["language"].as_str().unwrap_or("").to_string();
-            let title = s["tags"]["title"].as_str()
-                .map(|t| t.to_string())
-                .unwrap_or_else(|| if lang.is_empty() {
-                    format!("Track {}", i + 1)
-                } else {
-                    lang.clone()
-                });
-            AudioTrackInfo { index: i, label: title, language: lang }
+            let label = audio_label(s, i + 1);
+            AudioTrackInfo { index: i, label, language: lang }
         }).collect())
         .unwrap_or_default();
 
@@ -291,12 +300,6 @@ pub async fn get_encoded_frame(
 }
 
 // ── encode_video_with_progress ───────────────────────────────────────────────
-//
-// New parameters (all optional / defaulted):
-//   trim_start      – start time in seconds (None = 0)
-//   trim_end        – end time in seconds   (None = full duration)
-//   deleted_tracks  – audio stream indices to drop (0-based among audio streams)
-//   volume_map      – map of audio stream index → volume percentage (100 = original)
 
 #[tauri::command]
 pub async fn encode_video_with_progress(
@@ -320,19 +323,14 @@ pub async fn encode_video_with_progress(
         let passlog     = std::env::temp_dir().join("qe_passlog");
         let passlog_str = passlog.to_str().unwrap().to_string();
 
-        // Trim arguments for input seeking
         let mut trim_args: Vec<String> = vec![];
         if let Some(ss) = trim_start {
             if ss > 0.0 {
                 trim_args.extend(["-ss".into(), format!("{ss:.3}")]);
             }
         }
-
-        // -to is relative to -ss when placed before -i in fast-seek mode;
-        // we pass absolute time and let ffmpeg handle it correctly.
         let to_val: Option<String> = trim_end.map(|te| format!("{te:.3}"));
 
-        // Video filter chain
         let mut vf_parts: Vec<String> = vec![];
         match resolution.as_str() {
             "1080p" => vf_parts.push("scale=-2:1080".into()),
@@ -346,18 +344,11 @@ pub async fn encode_video_with_progress(
             vec!["-vf".into(), vf_parts.join(",")]
         } else { vec![] };
 
-        // Determine active audio streams: all indices 0..N minus deleted_tracks.
-        // We don't know N here so we probe it from all audio streams that were
-        // returned by get_video_info (volume_map keys tell us the set).
-        // A simpler approach: iterate 0..16 and let FFmpeg silently skip missing ones.
-        // The deleted_tracks list tells us which to skip.
-        let max_audio = 16usize; // reasonable upper bound
+        let max_audio = 16usize;
         let active_audio: Vec<usize> = (0..max_audio)
             .filter(|i| !deleted_tracks.contains(i))
             .collect();
 
-        // Build complex audio filtergraph for volume adjustments.
-        // Only needed if any active track has a non-100% volume.
         let has_volume_changes = active_audio.iter().any(|i| {
             volume_map.get(i).copied().unwrap_or(100) != 100
         });
@@ -405,7 +396,6 @@ pub async fn encode_video_with_progress(
         pass2.extend(["-map".into(), "0:v:0".into()]);
 
         if has_volume_changes {
-            // Build filtergraph: [0:a:N]volume=X.XX[aN]
             let mut filter_parts: Vec<String> = vec![];
             let mut out_labels: Vec<String> = vec![];
             for (out_idx, &ai) in active_audio.iter().enumerate() {
@@ -415,12 +405,11 @@ pub async fn encode_video_with_progress(
                 filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
                 out_labels.push(format!("[{label}]"));
             }
-            pass2.extend(["-filter_complex".into(), filter_parts.join(";".into())]);
+            pass2.extend(["-filter_complex".into(), filter_parts.join(";")]);
             for label in &out_labels {
                 pass2.extend(["-map".into(), label.clone()]);
             }
         } else {
-            // No volume changes — just map active audio streams directly
             for &ai in &active_audio {
                 pass2.extend(["-map".into(), format!("0:a:{ai}?")]);
             }

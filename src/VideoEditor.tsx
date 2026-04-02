@@ -35,8 +35,7 @@ interface Props {
   onCancel:  () => void;
 }
 
-// Hit radius in px for grabbing a trim handle
-const HANDLE_HIT_PX = 18;
+const HANDLE_HIT_PX = 20;
 
 // ── component ──────────────────────────────────────────────────────────────
 export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel }: Props) {
@@ -49,37 +48,41 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const [trimStart,   setTrimStart]   = useState(0);
   const [trimEnd,     setTrimEnd]     = useState(duration);
 
-  // Keep mutable refs in sync so callbacks never close over stale values
   const trimStartRef = useRef(0);
   const trimEndRef   = useRef(duration);
   useEffect(() => { trimStartRef.current = trimStart; }, [trimStart]);
   useEffect(() => { trimEndRef.current   = trimEnd;   }, [trimEnd]);
 
-  // Drag state — stored in refs to avoid re-renders on every pointermove
   const dragging = useRef<"start" | "end" | null>(null);
 
-  // Audio tracks
+  // Clean up "und" / empty language tags — show "Track N" instead
   const defaultTracks = (
-    info.audio_tracks ?? [{ index: 0, label: "Audio", language: "" }]
-  ).map(t => ({
-    index:   t.index,
-    label:   t.label || `Track ${t.index + 1}`,
-    volume:  100,
-    deleted: false,
-  }));
+    info.audio_tracks ?? [{ index: 0, label: "Track 1", language: "" }]
+  ).map((t, i) => {
+    const rawLabel = t.label || "";
+    const isUnd = rawLabel.toLowerCase() === "und" || rawLabel.trim() === "";
+    return {
+      index:   t.index,
+      label:   isUnd ? `Track ${i + 1}` : rawLabel,
+      volume:  100,
+      deleted: false,
+    };
+  });
   const [tracks, setTracks] = useState(defaultTracks);
 
   const isDark     = theme === "dark";
   const fillColor  = isDark ? "#888888" : "#555555";
   const emptyColor = isDark ? "#333336" : "#d0d0d0";
 
-  // Tauri asset URL — no crossOrigin to avoid CORS issues on tauri:// protocol
+  // Use convertFileSrc to convert the native file path to a tauri:// asset URL
   const videoSrc = convertFileSrc(filePath);
 
   // Force reload when src changes
   useEffect(() => {
     const v = videoRef.current;
-    if (v) v.load();
+    if (!v) return;
+    v.src = videoSrc;
+    v.load();
   }, [videoSrc]);
 
   // ── Pause at trimEnd & track currentTime ───────────────────────────────
@@ -112,7 +115,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     if (!v) return;
     if (v.paused) {
       if (v.currentTime >= trimEndRef.current) v.currentTime = trimStartRef.current;
-      v.play();
+      v.play().catch(() => {});
     } else {
       v.pause();
     }
@@ -211,10 +214,10 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   });
 
   // ── Derived percentages ────────────────────────────────────────────────
-  const playPct   = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const startPct  = duration > 0 ? (trimStart   / duration) * 100 : 0;
-  const endPct    = duration > 0 ? (trimEnd     / duration) * 100 : 100;
-  const clipLen   = trimEnd - trimStart;
+  const playPct  = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const startPct = duration > 0 ? (trimStart   / duration) * 100 : 0;
+  const endPct   = duration > 0 ? (trimEnd     / duration) * 100 : 100;
+  const clipLen  = trimEnd - trimStart;
 
   return (
     <div className="veditor-overlay">
@@ -234,15 +237,9 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
       {/* ── VIDEO ──────────────────────────────────────────────────────── */}
       <div className="veditor-video-wrap">
         <video
-          key={videoSrc}
           ref={videoRef}
-          src={videoSrc}
           preload="auto"
           playsInline
-          onLoadedMetadata={() => {
-            const v = videoRef.current;
-            if (v) v.currentTime = 0;
-          }}
           tabIndex={-1}
         />
       </div>
@@ -270,7 +267,18 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           {fmtTime(currentTime)}&nbsp;/&nbsp;{fmtTime(duration)}
         </span>
 
-        {/* ── Unified trim timeline ── */}
+        <span className="veditor-time" style={{ opacity: 0.55, fontSize: 10, marginLeft: "auto" }}>
+          clip&nbsp;{fmtTime(clipLen)}
+        </span>
+      </div>
+
+      {/* ── TRIM TIMELINE ──────────────────────────────────────────────── */}
+      <div className="veditor-timeline">
+        <div className="veditor-timeline-labels">
+          <span className="veditor-tl-label-start">{fmtTime(trimStart)}</span>
+          <span className="veditor-tl-label-end">{fmtTime(trimEnd)}</span>
+        </div>
+
         <div
           ref={timelineRef}
           className="veditor-timeline-track"
@@ -280,11 +288,11 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           onPointerCancel={onTimelinePointerUp}
         >
           {/* Base rail */}
-          <div className="vtl-bg" />
+          <div className="vtl-rail" />
 
-          {/* Dimmed regions outside the trim window */}
+          {/* Dimmed regions outside trim window */}
           <div className="vtl-dim" style={{ left: 0, width: `${startPct}%` }} />
-          <div className="vtl-dim" style={{ left: `${endPct}%`, right: 0 }} />
+          <div className="vtl-dim" style={{ left: `${endPct}%`, right: 0, width: "auto" }} />
 
           {/* Active (in-trim) region */}
           <div className="vtl-active" style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }} />
@@ -293,39 +301,22 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           <div className="vtl-playhead" style={{ left: `${playPct}%` }} />
 
           {/* Trim start handle */}
-          <div className="vtl-handle vtl-handle-start" style={{ left: `${startPct}%` }}>
-            <div className="vtl-handle-bar" />
-            <div className="vtl-handle-time">{fmtTime(trimStart)}</div>
+          <div className="vtl-handle" style={{ left: `${startPct}%` }}>
+            <div className="vtl-handle-grip" />
           </div>
 
           {/* Trim end handle */}
-          <div className="vtl-handle vtl-handle-end" style={{ left: `${endPct}%` }}>
-            <div className="vtl-handle-bar" />
-            <div className="vtl-handle-time">{fmtTime(trimEnd)}</div>
+          <div className="vtl-handle" style={{ left: `${endPct}%` }}>
+            <div className="vtl-handle-grip" />
           </div>
         </div>
 
-        <span className="veditor-time" style={{ opacity: 0.6, fontSize: 10 }}>
-          clip&nbsp;{fmtTime(clipLen)}
-        </span>
-      </div>
-
-      {/* ── VIDEO TRACK LABEL ──────────────────────────────────────────── */}
-      <div className="veditor-track-section">
-        <span className="veditor-section-label">Video Track</span>
-        <div className="veditor-video-track-row">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.6 }}>
-            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
-            <line x1="7" y1="2" x2="7" y2="22"/>
-            <line x1="17" y1="2" x2="17" y2="22"/>
-            <line x1="2" y1="12" x2="22" y2="12"/>
-            <line x1="2" y1="7" x2="7" y2="7"/>
-            <line x1="2" y1="17" x2="7" y2="17"/>
-            <line x1="17" y1="17" x2="22" y2="17"/>
-            <line x1="17" y1="7" x2="22" y2="7"/>
-          </svg>
-          <span className="veditor-track-label">{basename(filePath)}</span>
-          <span className="veditor-track-vol-pct" style={{ marginLeft: "auto" }}>{fmtTime(clipLen)}</span>
+        <div className="veditor-timeline-timestamps">
+          <span>{fmtTime(0)}</span>
+          <span>{fmtTime(duration / 4)}</span>
+          <span>{fmtTime(duration / 2)}</span>
+          <span>{fmtTime(duration * 3 / 4)}</span>
+          <span>{fmtTime(duration)}</span>
         </div>
       </div>
 
