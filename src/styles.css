@@ -964,181 +964,68 @@ select:focus { border-color: var(--text-dim); }
 .progress-done-msg { color: var(--success); font-weight: 700; }
 .progress-file-label { font-size: 10.5px; color: var(--text-dim); }
 
-/* -- Fullscreen modal -- */
-.fullscreen-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-  cursor: zoom-out;
-  backdrop-filter: blur(20px);
-}
-.fullscreen-overlay img {
-  max-width: 95vw;
-  max-height: 95vh;
-  border-radius: var(--radius-card);
-  object-fit: contain;
-  box-shadow: var(--shadow-md);
-}
-.fullscreen-close {
-  position: absolute;
-  top: 18px;
-  right: 20px;
-  font-size: 15px;
-  color: var(--text-dim);
-  cursor: pointer;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-pill);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  transition: color 0.14s, background 0.14s;
-}
-.fullscreen-close:hover { color: var(--text-muted); background: var(--surface-3); }
-.fullscreen-label {
-  position: absolute;
-  top: 20px;
-  left: 22px;
-  font-size: 10px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-weight: 700;
-  background: var(--surface-2);
-  padding: 3px 9px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border);
-}
-
-/* -- Spinner -- */
-.spin {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid var(--surface-3);
-  border-top-color: var(--text-dim);
-  border-radius: 50%;
-  animation: spin 0.75s linear infinite;
-  flex-shrink: 0;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* -- Status bar -- */
-.status-bar {
-  text-align: center;
-  font-size: 10.5px;
-  color: var(--text-dim);
-  min-height: 13px;
-  flex-shrink: 0;
-  font-weight: 500;
-}
-
-/* -- Batch bottom -- */
-.batch-bottom {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.batch-settings-row {
-  display: grid;
-  grid-template-columns: 1fr 1px 1.5fr;
-  gap: 0 16px;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.batch-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.batch-add-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 12px;
-  background: none;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-pill);
-  color: var(--text-muted);
-  font-size: 12px;
-  font-family: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.14s, color 0.14s;
-}
-.batch-add-btn:hover { border-color: var(--text-dim); color: var(--text); }
-
 /* ══════════════════════════════════════════
-   VIDEO EDITOR MODAL
+   VIDEO EDITOR OVERLAY
    ══════════════════════════════════════════ */
+
+/* ── Overlay container ─────────────────────────────────────────── */
 .veditor-overlay {
   position: fixed;
   inset: 0;
+  z-index: 200;
   background: var(--bg);
-  z-index: 300;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-/* Header */
+/* ── Header ────────────────────────────────────────────────────── */
 .veditor-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  gap: 8px;
 }
 .veditor-header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-.veditor-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  letter-spacing: -0.1px;
-}
-.veditor-filename {
-  font-size: 11px;
-  color: var(--text-dim);
-  font-weight: 500;
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  gap: 7px;
+  min-width: 0;
 }
 .veditor-header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-shrink: 0;
+}
+.veditor-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.veditor-filename {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .veditor-close {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: none;
+  font-size: 18px;
+  line-height: 1;
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 14px;
-  transition: color 0.14s, border-color 0.14s, background 0.14s;
+  padding: 0 2px;
+  transition: color 0.14s;
 }
-.veditor-close:hover { color: var(--text-muted); border-color: var(--border-2); background: var(--surface-2); }
+.veditor-close:hover { color: var(--text); }
 
-/* Video area */
+/* ── Video area ────────────────────────────────────────────────── */
 .veditor-video-wrap {
   flex: 1;
   min-height: 0;
@@ -1147,6 +1034,7 @@ select:focus { border-color: var(--text-dim); }
   justify-content: center;
   background: #000;
   position: relative;
+  overflow: hidden;
 }
 .veditor-video-wrap video {
   max-width: 100%;
@@ -1154,277 +1042,311 @@ select:focus { border-color: var(--text-dim); }
   display: block;
   outline: none;
 }
+/* Loading spinner shown while video metadata isn't ready */
+.veditor-video-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.spin {
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(255,255,255,0.18);
+  border-top-color: rgba(255,255,255,0.7);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
-/* ── Playback controls ── */
+/* ── Controls bar ──────────────────────────────────────────────── */
 .veditor-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  background: var(--surface);
+  gap: 9px;
+  padding: 8px 12px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 .veditor-play-btn {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--text);
-  color: var(--bg);
-  border: none;
-  border-radius: var(--radius-pill);
-  cursor: pointer;
   flex-shrink: 0;
-  transition: opacity 0.14s;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
 }
-.veditor-play-btn:hover { opacity: 0.8; }
+.veditor-play-btn:hover { background: var(--surface-3); }
 .veditor-time {
-  font-size: 11px;
-  color: var(--text-dim);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--text-muted);
   white-space: nowrap;
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.veditor-clip-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
-/* ── Trim timeline ── */
-.veditor-timeline {
-  flex-shrink: 0;
-  padding: 10px 16px 10px;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+/* ── Inline timeline block (stretches between time and clip label) */
+.veditor-controls-timeline {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 3px;
 }
-.veditor-timeline-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  padding: 0 2px;
-}
-.veditor-tl-label-start,
-.veditor-tl-label-end { font-variant-numeric: tabular-nums; }
+
+/* ── Timeline track (the draggable rail) ────────────────────────── */
 .veditor-timeline-track {
   position: relative;
-  height: 32px;
-  cursor: crosshair;
+  height: 26px;
+  cursor: pointer;
   user-select: none;
   touch-action: none;
-  flex-shrink: 0;
 }
 
 /* Base rail */
 .vtl-rail {
   position: absolute;
+  top: 50%;
   left: 0;
   right: 0;
-  top: 50%;
-  transform: translateY(-50%);
   height: 5px;
-  background: var(--surface-3);
+  transform: translateY(-50%);
   border-radius: 3px;
-  pointer-events: none;
+  background: var(--track-empty);
 }
-/* Dimmed regions (outside trim) */
+
+/* Dimmed out-of-trim regions */
 .vtl-dim {
   position: absolute;
   top: 50%;
-  transform: translateY(-50%);
   height: 5px;
-  background: var(--surface-3);
-  pointer-events: none;
+  transform: translateY(-50%);
+  background: rgba(128,128,128,0.18);
   z-index: 1;
+  pointer-events: none;
 }
-/* Active region (inside trim) */
+
+/* Active (in-trim) fill */
 .vtl-active {
   position: absolute;
   top: 50%;
-  transform: translateY(-50%);
   height: 5px;
-  background: var(--text-muted);
+  transform: translateY(-50%);
+  background: var(--track-fill);
   border-radius: 2px;
+  z-index: 1;
   pointer-events: none;
-  z-index: 2;
 }
-/* Playhead */
+
+/* Playhead needle */
 .vtl-playhead {
   position: absolute;
   top: 50%;
-  transform: translate(-50%, -50%);
   width: 2px;
-  height: 24px;
+  height: 18px;
+  transform: translate(-50%, -50%);
   background: var(--text);
   border-radius: 1px;
+  z-index: 3;
   pointer-events: none;
-  z-index: 4;
-  box-shadow: 0 0 0 1px var(--bg);
 }
-/* Handles */
+
+/* Trim handles */
 .vtl-handle {
   position: absolute;
   top: 50%;
   transform: translate(-50%, -50%);
-  z-index: 5;
+  z-index: 4;
   cursor: ew-resize;
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Larger hit area than visual */
   width: 20px;
-  height: 32px;
+  height: 26px;
 }
 .vtl-handle-grip {
-  width: 5px;
+  width: 4px;
   height: 20px;
+  border-radius: 2px;
   background: var(--text);
-  border-radius: 3px;
-  border: 2px solid var(--bg);
-  box-shadow: var(--shadow-sm);
-  pointer-events: none;
+  opacity: 0.8;
+  transition: opacity 0.12s, background 0.12s;
 }
-/* Timestamps row below track */
+.vtl-handle:hover .vtl-handle-grip,
+.vtl-handle:active .vtl-handle-grip {
+  opacity: 1;
+  background: var(--text-muted);
+}
+
+/* Timestamp row below the track */
 .veditor-timeline-timestamps {
   display: flex;
   justify-content: space-between;
-  font-size: 9.5px;
-  color: var(--text-faint);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  padding: 0 2px;
-}
-
-/* ── Section label (shared) ── */
-.veditor-section-label {
-  font-size: 9.5px;
+  font-size: 9px;
   color: var(--text-dim);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  padding: 0 1px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
-/* ── Audio tracks panel ── */
+/* ── Audio section ─────────────────────────────────────────────── */
 .veditor-audio {
-  flex-shrink: 0;
-  padding: 8px 16px 10px;
-  background: var(--surface);
+  padding: 7px 12px;
   border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 160px;
+  flex-shrink: 0;
+  max-height: 180px;
   overflow-y: auto;
 }
 .veditor-audio::-webkit-scrollbar { width: 3px; }
-.veditor-audio::-webkit-scrollbar-track { background: transparent; }
 .veditor-audio::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
+.veditor-section-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
 
+/* Track row */
 .veditor-track-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  margin-bottom: 4px;
 }
-.veditor-track-deleted { opacity: 0.35; pointer-events: none; }
+.veditor-track-row:last-child { margin-bottom: 0; }
+.veditor-track-deleted {
+  opacity: 0.42;
+}
 .veditor-track-label {
   font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  min-width: 72px;
-  white-space: nowrap;
+  color: var(--text);
+  flex-shrink: 0;
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 0;
+  white-space: nowrap;
 }
+
+/* Volume slider + percentage */
 .veditor-track-vol-wrap {
-  flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.veditor-track-vol-wrap input[type="range"] {
+  flex: 1;
+  height: 2px;
 }
 .veditor-track-vol-pct {
-  font-size: 10.5px;
-  color: var(--text-dim);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  min-width: 36px;
+  font-size: 10px;
+  color: var(--text-muted);
+  min-width: 34px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
+
+/* Restore link */
 .veditor-track-restore {
   font-size: 10px;
-  color: var(--text-dim);
+  color: var(--text-muted);
   cursor: pointer;
-  pointer-events: auto;
-  text-decoration: underline;
-  white-space: nowrap;
   margin-left: auto;
+  transition: color 0.14s;
 }
-.veditor-track-restore:hover { color: var(--text-muted); }
+.veditor-track-restore:hover { color: var(--text); }
+
+/* Delete/restore icon button */
 .veditor-track-delete {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: none;
+  border: none;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-dim);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-faint);
   cursor: pointer;
-  transition: color 0.14s, border-color 0.14s, background 0.14s;
-  flex-shrink: 0;
+  transition: background 0.14s, color 0.14s;
 }
 .veditor-track-delete:hover {
+  background: var(--surface-2);
   color: var(--error);
-  border-color: var(--error);
-  background: color-mix(in srgb, var(--error) 8%, var(--surface));
 }
 
-/* ── Footer ── */
+/* ── Footer ────────────────────────────────────────────────────── */
 .veditor-footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 8px 16px;
+  gap: 7px;
+  padding: 8px 12px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-  background: var(--surface);
 }
 .veditor-trim-summary {
   flex: 1;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-dim);
-  font-weight: 500;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .veditor-cancel {
-  padding: 6px 16px;
-  background: none;
-  border: 1px solid var(--border-2);
+  padding: 5px 13px;
   border-radius: var(--radius-pill);
-  font-size: 12px;
+  font-size: 11.5px;
   font-family: inherit;
   font-weight: 600;
+  background: var(--surface-2);
   color: var(--text-muted);
+  border: 1px solid var(--border-2);
   cursor: pointer;
-  transition: border-color 0.14s, color 0.14s, background 0.14s;
+  transition: background 0.14s, color 0.14s;
+  flex-shrink: 0;
 }
-.veditor-cancel:hover { border-color: var(--text-dim); color: var(--text); background: var(--surface-2); }
+.veditor-cancel:hover { background: var(--surface-3); color: var(--text); }
 .veditor-confirm {
-  padding: 6px 20px;
+  padding: 5px 13px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-family: inherit;
+  font-weight: 700;
   background: var(--encode-bg);
   color: var(--encode-text);
   border: none;
-  border-radius: var(--radius-pill);
-  font-size: 12.5px;
-  font-family: inherit;
-  font-weight: 700;
   cursor: pointer;
   transition: opacity 0.14s;
+  flex-shrink: 0;
 }
 .veditor-confirm:hover { opacity: 0.82; }
