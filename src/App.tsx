@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import VideoEditor from "./VideoEditor";
 
 interface VideoInfo {
@@ -417,12 +416,14 @@ export default function App() {
     setEncoding(true);
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     try {
-      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                       ? videoEdits.trimStart : null;
-      const trimEndArg   = (videoEdits && videoEdits.trimEnd   < info.duration_secs)      ? videoEdits.trimEnd   : null;
-      const deletedTracks  = videoEdits?.audioTracks.filter(t => t.deleted).map(t => t.index)   ?? [];
+      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                  ? videoEdits.trimStart : null;
+      const trimEndArg   = (videoEdits && videoEdits.trimEnd < info.duration_secs)   ? videoEdits.trimEnd   : null;
+      const deletedTracks  = videoEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
       const volumeMap      = videoEdits?.audioTracks
         .filter(t => !t.deleted && t.volume !== 100)
         .reduce<Record<number, number>>((acc, t) => { acc[t.index] = t.volume; return acc; }, {}) ?? {};
+      // Total audio streams in the source — required so Rust only maps real streams.
+      const totalAudioTracks = info.audio_tracks?.length ?? 1;
 
       await invoke("encode_video_with_progress", {
         input:            filePath,
@@ -436,6 +437,7 @@ export default function App() {
         trimEnd:          trimEndArg,
         deletedTracks,
         volumeMap,
+        totalAudioTracks,
       });
       let finalMb = estMb;
       try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
@@ -495,6 +497,7 @@ export default function App() {
           durationSecs: infoRaw.duration_secs,
           trimStart: null, trimEnd: null,
           deletedTracks: [], volumeMap: {},
+          totalAudioTracks: infoRaw.audio_tracks?.length ?? 1,
         });
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
         succeeded++;
