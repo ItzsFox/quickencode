@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 interface VideoInfo {
   duration_secs: number;
@@ -10,6 +11,12 @@ interface VideoInfo {
   bitrate_kbps:  number;
   width:         number;
   height:        number;
+  audio_tracks?: AudioTrackInfo[];
+}
+interface AudioTrackInfo {
+  index:    number;
+  label:    string;
+  language: string;
 }
 interface EncodeProgress {
   percent:  number;
@@ -31,6 +38,13 @@ interface BatchDoneResult {
   succeeded: number;
   failed:    number;
   outputDir: string;
+}
+
+/** State produced by the VideoEditor and consumed by runEncode */
+export interface VideoEdits {
+  trimStart:    number;   // seconds
+  trimEnd:      number;   // seconds
+  audioTracks:  { index: number; volume: number; deleted: boolean }[];
 }
 
 const FRAME_COUNT    = 10;
@@ -201,6 +215,297 @@ function QualitySettings({ quality, resolution, format, audio, fps, theme, onQua
   );
 }
 
+// ─────────────────────────────────────────────────────────
+// VIDEO EDITOR MODAL
+// ─────────────────────────────────────────────────────────
+interface VideoEditorProps {
+  filePath:  string;
+  info:      VideoInfo;
+  theme:     "light" | "dark";
+  onConfirm: (edits: VideoEdits) => void;
+  onCancel:  () => void;
+}
+
+function VideoEditor({ filePath, info, theme, onConfirm, onCancel }: VideoEditorProps) {
+  const videoRef  = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const duration = info.duration_secs;
+
+  // Trim state
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd,   setTrimEnd]   = useState(duration);
+
+  // Audio track state: one entry per track reported by VideoInfo
+  const defaultTracks = (info.audio_tracks ?? [{ index: 0, label: "Audio", language: "" }]).map(t => ({
+    index:   t.index,
+    label:   t.label || `Track ${t.index + 1}`,
+    volume:  100,
+    deleted: false,
+  }));
+  const [tracks, setTracks] = useState(defaultTracks);
+
+  const isDark = theme === "dark";
+  const fillColor  = isDark ? "#888888" : "#555555";
+  const emptyColor = isDark ? "#333336" : "#d0d0d0";
+
+  // Sync video element time with trimStart on mount / trim change
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    // Clamp video playback inside the trim window
+    if (v.currentTime < trimStart || v.currentTime > trimEnd) {
+      v.currentTime = trimStart;
+    }
+  }, [trimStart, trimEnd]);
+
+  // Pause when reaching trimEnd during playback
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onTimeUpdate = () => {
+      setCurrentTime(v.currentTime);
+      if (v.currentTime >= trimEnd) {
+        v.pause();
+        v.currentTime = trimEnd;
+        setPlaying(false);
+      }
+    };
+    v.addEventListener("timeupdate", onTimeUpdate);
+    return () => v.removeEventListener("timeupdate", onTimeUpdate);
+  }, [trimEnd]);
+
+  // Keyboard: space to toggle play/pause
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      // If we're at or past trimEnd, restart from trimStart
+      if (v.currentTime >= trimEnd) v.currentTime = trimStart;
+      v.play();
+      setPlaying(true);
+    } else {
+      v.pause();
+      setPlaying(false);
+    }
+  };
+
+  const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const t = Number(e.target.value);
+    setCurrentTime(t);
+    if (videoRef.current) videoRef.current.currentTime = t;
+  };
+
+  const handleTrimStart = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = Math.min(Number(e.target.value), trimEnd - 0.5);
+    setTrimStart(v);
+  };
+
+  const handleTrimEnd = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = Math.max(Number(e.target.value), trimStart + 0.5);
+    setTrimEnd(v);
+  };
+
+  const handleVolume = (idx: number, vol: number) => {
+    setTracks(prev => prev.map((t, i) => i === idx ? { ...t, volume: vol } : t));
+  };
+  const handleDelete = (idx: number) => {
+    setTracks(prev => prev.map((t, i) => i === idx ? { ...t, deleted: true } : t));
+  };
+  const handleRestore = (idx: number) => {
+    setTracks(prev => prev.map((t, i) => i === idx ? { ...t, deleted: false } : t));
+  };
+
+  const confirm = () => {
+    onConfirm({
+      trimStart,
+      trimEnd,
+      audioTracks: tracks.map(t => ({ index: t.index, volume: t.volume, deleted: t.deleted })),
+    });
+  };
+
+  // Derived display values
+  const scrubPct   = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const startPct   = duration > 0 ? (trimStart   / duration) * 100 : 0;
+  const endPct     = duration > 0 ? (trimEnd     / duration) * 100 : 100;
+  const clipLength = trimEnd - trimStart;
+
+  // Convert file path to a URL the WebView can load
+  const videoSrc = convertFileSrc(filePath);
+
+  return (
+    <div className="veditor-overlay">
+      {/* Header */}
+      <div className="veditor-header">
+        <div className="veditor-header-left">
+          <QELogo size={16} />
+          <span className="veditor-title">Video Editor</span>
+          <span className="veditor-filename">{basename(filePath)}</span>
+        </div>
+        <div className="veditor-header-right">
+          <button className="veditor-close" onClick={onCancel} aria-label="Close editor">&times;</button>
+        </div>
+      </div>
+
+      {/* Video */}
+      <div className="veditor-video-wrap">
+        <video
+          ref={videoRef}
+          src={videoSrc}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onLoadedMetadata={() => { if (videoRef.current) videoRef.current.currentTime = trimStart; }}
+          preload="metadata"
+          tabIndex={-1}
+        />
+      </div>
+
+      {/* Playback controls */}
+      <div className="veditor-controls">
+        <button className="veditor-play-btn" onClick={togglePlay} aria-label={playing ? "Pause" : "Play"}>
+          {playing ? (
+            // Pause icon
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="4" width="4" height="16" rx="1"/>
+              <rect x="14" y="4" width="4" height="16" rx="1"/>
+            </svg>
+          ) : (
+            // Play icon
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5,3 19,12 5,21"/>
+            </svg>
+          )}
+        </button>
+        <span className="veditor-time">{fmtTime(currentTime)} / {fmtTime(duration)}</span>
+        {/* Scrub bar */}
+        <div className="veditor-scrub-wrap">
+          <div className="veditor-scrub-track" />
+          <div className="veditor-scrub-filled" style={{ width: `${scrubPct}%` }} />
+          <input
+            className="veditor-scrub-input"
+            type="range" min={0} max={duration} step={0.05}
+            value={currentTime}
+            onChange={handleScrub}
+          />
+        </div>
+      </div>
+
+      {/* Trim timeline */}
+      <div className="veditor-timeline">
+        <span className="veditor-section-label">Video Track — Trim</span>
+        <div className="veditor-trim-row">
+          <span className="veditor-trim-time">{fmtTime(trimStart)}</span>
+          <div className="veditor-trim-wrap">
+            {/* Track background */}
+            <div className="veditor-trim-track" />
+            {/* Active region */}
+            <div
+              className="veditor-trim-active"
+              style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
+            />
+            {/* Start thumb marker */}
+            <div
+              className="veditor-trim-thumb"
+              style={{ left: `${startPct}%` }}
+            />
+            {/* End thumb marker */}
+            <div
+              className="veditor-trim-thumb"
+              style={{ left: `${endPct}%` }}
+            />
+            {/* Start handle (invisible range, top layer) */}
+            <input
+              className="veditor-trim-input"
+              style={{ zIndex: 2 }}
+              type="range" min={0} max={duration} step={0.05}
+              value={trimStart}
+              onChange={handleTrimStart}
+            />
+            {/* End handle (invisible range, top layer) */}
+            <input
+              className="veditor-trim-input"
+              style={{ zIndex: 3 }}
+              type="range" min={0} max={duration} step={0.05}
+              value={trimEnd}
+              onChange={handleTrimEnd}
+            />
+          </div>
+          <span className="veditor-trim-time end">{fmtTime(trimEnd)}</span>
+        </div>
+      </div>
+
+      {/* Audio tracks */}
+      {tracks.length > 0 && (
+        <div className="veditor-audio">
+          <span className="veditor-section-label">Audio Tracks</span>
+          {tracks.map((t, i) => (
+            <div key={t.index} className={`veditor-track-row${t.deleted ? " veditor-track-deleted" : ""}`}>
+              <span className="veditor-track-label" title={t.label}>{t.label}</span>
+              {t.deleted ? (
+                <span className="veditor-track-restore" onClick={() => handleRestore(i)}>Restore</span>
+              ) : (
+                <div className="veditor-track-vol-wrap">
+                  <input
+                    type="range" min={0} max={200} step={1}
+                    value={t.volume}
+                    style={{ background: sliderBg(t.volume, 0, 200, fillColor, emptyColor), flex: 1 }}
+                    onChange={e => handleVolume(i, Number(e.target.value))}
+                  />
+                  <span className="veditor-track-vol-pct">{t.volume}%</span>
+                </div>
+              )}
+              <button
+                className="veditor-track-delete"
+                onClick={() => t.deleted ? handleRestore(i) : handleDelete(i)}
+                title={t.deleted ? "Restore track" : "Remove track"}
+                aria-label={t.deleted ? "Restore track" : "Remove track"}
+              >
+                {t.deleted ? (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <polyline points="1 4 1 10 7 10"/>
+                    <path d="M3.51 15a9 9 0 1 0 .49-5.95"/>
+                  </svg>
+                ) : (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14H6L5 6"/>
+                    <path d="M10 11v6"/><path d="M14 11v6"/>
+                    <path d="M9 6V4h6v2"/>
+                  </svg>
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className="veditor-footer">
+        <span className="veditor-trim-summary">
+          Clip: {fmtTime(trimStart)} – {fmtTime(trimEnd)} &nbsp;&middot;&nbsp; {fmtTime(clipLength)}
+          {tracks.some(t => t.deleted) && ` · ${tracks.filter(t => t.deleted).length} track(s) removed`}
+        </span>
+        <button className="veditor-cancel" onClick={onCancel}>Cancel</button>
+        <button className="veditor-confirm" onClick={confirm}>Confirm &amp; Back to Settings</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// MAIN APP
+// ─────────────────────────────────────────────────────────
 export default function App() {
   const initTheme = (): "light" | "dark" => {
     try { return (localStorage.getItem("qe_theme") as "light" | "dark") ?? "light"; }
@@ -238,13 +543,16 @@ export default function App() {
   const [status, setStatus]         = useState("");
   const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
 
+  // Video editor state
+  const [showEditor, setShowEditor] = useState(false);
+  const [videoEdits, setVideoEdits] = useState<VideoEdits | null>(null);
+
   const [batchFiles, setBatchFiles]           = useState<BatchFile[]>([]);
   const [batchProgress, setBatchProgress]     = useState<{idx: number; enc: EncodeProgress; currentFile: string} | null>(null);
   const [batchRunning, setBatchRunning]       = useState(false);
   const [batchDoneResult, setBatchDoneResult] = useState<BatchDoneResult | null>(null);
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Track mounted state to avoid setState on unmounted component
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -256,10 +564,14 @@ export default function App() {
 
   const base    = resolution === "original" ? (info?.bitrate_kbps ?? 5000) : RES_BITRATES[resolution];
   const videoBr = Math.max(Math.round(base * (quality / 100)), 80);
-  const estMb   = info ? ((videoBr + audio) * info.duration_secs) / 8 / 1024 : 0;
+  // When trim edits are applied, scale the estimated MB by the clip ratio
+  const trimRatio = (info && videoEdits)
+    ? (videoEdits.trimEnd - videoEdits.trimStart) / info.duration_secs
+    : 1;
+  const estMb   = info ? ((videoBr + audio) * info.duration_secs) / 8 / 1024 * trimRatio : 0;
   const estLow  = estMb * 0.85;
   const estHigh = estMb * 1.15;
-  const reduction = info ? Math.round((1 - estMb / info.size_mb) * 100) : 0;
+  const reduction = info ? Math.round((1 - estMb / (info.size_mb * trimRatio + 0.001)) * 100) : 0;
 
   const loadEncodedFrame = useCallback((idx: number, vbr: number, res: string, f: string) => {
     if (!filePath || !info) return;
@@ -281,7 +593,6 @@ export default function App() {
     }, 600);
   }, [filePath, info]);
 
-  // Re-fetch preview when any setting that affects encoding changes
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     setEncFrames({});
@@ -289,7 +600,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoBr, resolution, fps, screen]);
 
-  // Fetch preview for newly selected frame if not yet cached
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps);
@@ -304,6 +614,7 @@ export default function App() {
     setFrameIdx(0);
     setStatus("");
     setDoneResult(null);
+    setVideoEdits(null);
     try {
       const [videoInfo, frames] = await Promise.all([
         invoke<VideoInfo>("get_video_info", { input: path }),
@@ -344,7 +655,6 @@ export default function App() {
       if (t === "leave") setDragOver(false);
       if (t === "drop") {
         setDragOver(false);
-        // Tauri's drop payload carries `paths` at runtime; narrow via type assertion
         const dropPayload = ev.payload as { type: "drop"; paths: string[] };
         const raw = dropPayload.paths;
         if (!raw?.length) return;
@@ -395,11 +705,28 @@ export default function App() {
     setEncoding(true);
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     try {
+      // Build the trim args (pass null if no edits or if trim covers full duration)
+      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)          ? videoEdits.trimStart : null;
+      const trimEndArg   = (videoEdits && videoEdits.trimEnd   < info.duration_secs) ? videoEdits.trimEnd   : null;
+      // Audio track edits: deleted tracks passed as track indices to drop;
+      // volume adjustments passed as a map of index->volume_percent
+      const deletedTracks  = videoEdits?.audioTracks.filter(t => t.deleted).map(t => t.index)   ?? [];
+      const volumeMap      = videoEdits?.audioTracks
+        .filter(t => !t.deleted && t.volume !== 100)
+        .reduce<Record<number, number>>((acc, t) => { acc[t.index] = t.volume; return acc; }, {}) ?? {};
+
       await invoke("encode_video_with_progress", {
-        input: filePath, output: out,
-        resolution: res, videoBitrateKbps: vbr,
-        audioBitrateKbps: abr, fps: f,
-        durationSecs: info.duration_secs,
+        input:            filePath,
+        output:           out,
+        resolution:       res,
+        videoBitrateKbps: vbr,
+        audioBitrateKbps: abr,
+        fps:              f,
+        durationSecs:     videoEdits ? (videoEdits.trimEnd - videoEdits.trimStart) : info.duration_secs,
+        trimStart:        trimStartArg,
+        trimEnd:          trimEndArg,
+        deletedTracks,
+        volumeMap,
       });
       let finalMb = estMb;
       try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
@@ -416,14 +743,14 @@ export default function App() {
   const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
   const handleDiscord = async () => {
     if (!info) return;
-    // Skip compression only if file is already at or below the DISCORD_TARGET (9 MB).
-    // We deliberately target 9 MB (not 10) because the encoder can overshoot slightly,
-    // and Discord rejects anything over 10 MB — even 10.1 MB.
     if (info.size_mb <= DISCORD_TARGET) {
       setStatus(`✅ Already under ${DISCORD_TARGET} MB — no compression needed.`);
       return;
     }
-    const vbr = discordBr(info.duration_secs);
+    const effectiveDuration = videoEdits
+      ? videoEdits.trimEnd - videoEdits.trimStart
+      : info.duration_secs;
+    const vbr = discordBr(effectiveDuration);
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
@@ -432,7 +759,6 @@ export default function App() {
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
     setBatchRunning(true);
-    // Seed progress so the overlay renders immediately on first file
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     let succeeded = 0;
     let failed = 0;
@@ -440,7 +766,6 @@ export default function App() {
       const file = batchFiles[i];
       setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "active" } : f));
       setBatchProgress({ idx: i, enc: { percent: 0, eta_secs: 0, pass: 1 }, currentFile: basename(file.path) });
-      // Reset progress for each new file so the bar starts fresh
       setProgress({ percent: 0, eta_secs: 0, pass: 1 });
       const inName  = basename(file.path).replace(/\.[^.]+$/, "");
       const suffix  = discordMode ? "_discord" : "_encoded";
@@ -459,6 +784,8 @@ export default function App() {
           resolution: res, videoBitrateKbps: vbr,
           audioBitrateKbps: abr, fps: f,
           durationSecs: infoRaw.duration_secs,
+          trimStart: null, trimEnd: null,
+          deletedTracks: [], volumeMap: {},
         });
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
         succeeded++;
@@ -498,16 +825,41 @@ export default function App() {
     setStatus(""); setProgress(null); setEncoding(false);
     setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
     setDoneResult(null); setBatchDoneResult(null);
+    setVideoEdits(null); setShowEditor(false);
   };
 
   const currentOrig = origFrames[frameIdx];
   const currentEnc  = encFrames[frameIdx];
-
-  // Aspect ratio from video dimensions — used to size preview boxes exactly
   const previewAspect = info ? info.width / info.height : 16 / 9;
+
+  // Badge shown on the Edit button when edits are applied
+  const editsBadge = videoEdits
+    ? (() => {
+        const parts: string[] = [];
+        if (videoEdits.trimStart > 0 || (info && videoEdits.trimEnd < info.duration_secs))
+          parts.push(fmtTime(videoEdits.trimEnd - videoEdits.trimStart));
+        const del = videoEdits.audioTracks.filter(t => t.deleted).length;
+        if (del) parts.push(`−${del} audio`);
+        return parts.join(" · ");
+      })()
+    : null;
 
   return (
     <div className="app">
+
+      {/* ── VIDEO EDITOR MODAL ── */}
+      {showEditor && filePath && info && (
+        <VideoEditor
+          filePath={filePath}
+          info={info}
+          theme={theme}
+          onConfirm={(edits) => {
+            setVideoEdits(edits);
+            setShowEditor(false);
+          }}
+          onCancel={() => setShowEditor(false)}
+        />
+      )}
 
       {/* ── DROP ── */}
       {screen === "drop" && (
@@ -794,11 +1146,25 @@ export default function App() {
                 <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
+            {/* Edit button — opens VideoEditor */}
+            <button
+              className="preset-btn"
+              onClick={() => setShowEditor(true)}
+              disabled={encoding}
+              title="Open video editor"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              Edit
+              {editsBadge && <span className="preset-size">{editsBadge}</span>}
+            </button>
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
               title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
               <DiscordIcon />
               Discord Ready
-              <span className="preset-size">≤9 MB</span>
+              <span className="preset-size">≤10 MB</span>
             </button>
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
               {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
