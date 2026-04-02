@@ -1,4 +1,4 @@
-// Shared types used by both App.tsx and VideoEditor.tsx
+// Shared types used by App.tsx and VideoEditor.tsx
 
 export interface AudioTrackInfo {
   index:    number;
@@ -15,8 +15,9 @@ export interface VideoInfo {
   audio_tracks?: AudioTrackInfo[];
 }
 
+/** Edits produced by VideoEditor and consumed by runEncode */
 export interface VideoEdits {
-  trimStart:   number;
-  trimEnd:     number;
+  trimStart:   number;  // seconds
+  trimEnd:     number;  // seconds
   audioTracks: { index: number; volume: number; deleted: boolean }[];
 }
