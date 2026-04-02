@@ -47,6 +47,8 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const [currentTime, setCurrentTime] = useState(0);
   const [trimStart,   setTrimStart]   = useState(0);
   const [trimEnd,     setTrimEnd]     = useState(duration);
+  // Track whether video has loaded at least metadata so we can seek
+  const [videoReady,  setVideoReady]  = useState(false);
 
   const trimStartRef = useRef(0);
   const trimEndRef   = useRef(duration);
@@ -74,21 +76,19 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const fillColor  = isDark ? "#888888" : "#555555";
   const emptyColor = isDark ? "#333336" : "#d0d0d0";
 
-  // Use convertFileSrc to convert the native file path to a tauri:// asset URL
+  // ── Video source ──────────────────────────────────────────────────────────
+  // convertFileSrc produces a tauri://localhost/... URL that the Tauri asset
+  // protocol can serve. We set it directly as the src attribute so the browser
+  // starts loading immediately. The crossOrigin attribute is required by the
+  // Tauri asset scope (CORS headers are set by the protocol handler).
   const videoSrc = convertFileSrc(filePath);
 
-  // Force reload when src changes
+  // ── Video event listeners ─────────────────────────────────────────────────
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    v.src = videoSrc;
-    v.load();
-  }, [videoSrc]);
 
-  // ── Pause at trimEnd & track currentTime ───────────────────────────────
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
+    const onLoadedMetadata = () => setVideoReady(true);
     const onTime = () => {
       setCurrentTime(v.currentTime);
       if (v.currentTime >= trimEndRef.current) {
@@ -99,13 +99,24 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     };
     const onPlay  = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    v.addEventListener("timeupdate", onTime);
-    v.addEventListener("play",       onPlay);
-    v.addEventListener("pause",      onPause);
+    const onError = () => {
+      // If the src failed (can happen if the asset protocol scope isn't
+      // configured yet), log and do nothing — the user will see a black frame
+      // but everything else still works.
+      console.warn("[VideoEditor] video load error, src:", v.src);
+    };
+
+    v.addEventListener("loadedmetadata", onLoadedMetadata);
+    v.addEventListener("timeupdate",     onTime);
+    v.addEventListener("play",           onPlay);
+    v.addEventListener("pause",          onPause);
+    v.addEventListener("error",          onError);
     return () => {
-      v.removeEventListener("timeupdate", onTime);
-      v.removeEventListener("play",       onPlay);
-      v.removeEventListener("pause",      onPause);
+      v.removeEventListener("loadedmetadata", onLoadedMetadata);
+      v.removeEventListener("timeupdate",     onTime);
+      v.removeEventListener("play",           onPlay);
+      v.removeEventListener("pause",          onPause);
+      v.removeEventListener("error",          onError);
     };
   }, []);
 
@@ -238,26 +249,35 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
       <div className="veditor-video-wrap">
         <video
           ref={videoRef}
+          src={videoSrc}
+          crossOrigin="anonymous"
           preload="auto"
           playsInline
           tabIndex={-1}
         />
+        {!videoReady && (
+          <div className="veditor-video-loading">
+            <div className="spin" />
+          </div>
+        )}
       </div>
 
-      {/* ── PLAYBACK CONTROLS ──────────────────────────────────────────── */}
+      {/* ── PLAYBACK CONTROLS + INLINE TIMELINE ────────────────────────── */}
       <div className="veditor-controls">
+
+        {/* Left: play button + current/total time */}
         <button
           className="veditor-play-btn"
           onClick={togglePlay}
           aria-label={playing ? "Pause" : "Play"}
         >
           {playing ? (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
               <rect x="6"  y="4" width="4" height="16" rx="1"/>
               <rect x="14" y="4" width="4" height="16" rx="1"/>
             </svg>
           ) : (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
               <polygon points="5,3 19,12 5,21"/>
             </svg>
           )}
@@ -267,57 +287,54 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           {fmtTime(currentTime)}&nbsp;/&nbsp;{fmtTime(duration)}
         </span>
 
-        <span className="veditor-time" style={{ opacity: 0.55, fontSize: 10, marginLeft: "auto" }}>
+        {/* Centre: the trim timeline — stretches to fill remaining space */}
+        <div className="veditor-controls-timeline">
+          <div
+            ref={timelineRef}
+            className="veditor-timeline-track"
+            onPointerDown={onTimelinePointerDown}
+            onPointerMove={onTimelinePointerMove}
+            onPointerUp={onTimelinePointerUp}
+            onPointerCancel={onTimelinePointerUp}
+          >
+            {/* Base rail */}
+            <div className="vtl-rail" />
+
+            {/* Dimmed regions outside trim window */}
+            <div className="vtl-dim" style={{ left: 0, width: `${startPct}%` }} />
+            <div className="vtl-dim" style={{ left: `${endPct}%`, right: 0, width: "auto" }} />
+
+            {/* Active (in-trim) region */}
+            <div className="vtl-active" style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }} />
+
+            {/* Playhead */}
+            <div className="vtl-playhead" style={{ left: `${playPct}%` }} />
+
+            {/* Trim start handle */}
+            <div className="vtl-handle" style={{ left: `${startPct}%` }}>
+              <div className="vtl-handle-grip" />
+            </div>
+
+            {/* Trim end handle */}
+            <div className="vtl-handle" style={{ left: `${endPct}%` }}>
+              <div className="vtl-handle-grip" />
+            </div>
+          </div>
+
+          {/* Timestamp ticks below the track */}
+          <div className="veditor-timeline-timestamps">
+            <span>{fmtTime(0)}</span>
+            <span>{fmtTime(duration / 4)}</span>
+            <span>{fmtTime(duration / 2)}</span>
+            <span>{fmtTime(duration * 3 / 4)}</span>
+            <span>{fmtTime(duration)}</span>
+          </div>
+        </div>
+
+        {/* Right: clip length label */}
+        <span className="veditor-clip-label">
           clip&nbsp;{fmtTime(clipLen)}
         </span>
-      </div>
-
-      {/* ── TRIM TIMELINE ──────────────────────────────────────────────── */}
-      <div className="veditor-timeline">
-        <div className="veditor-timeline-labels">
-          <span className="veditor-tl-label-start">{fmtTime(trimStart)}</span>
-          <span className="veditor-tl-label-end">{fmtTime(trimEnd)}</span>
-        </div>
-
-        <div
-          ref={timelineRef}
-          className="veditor-timeline-track"
-          onPointerDown={onTimelinePointerDown}
-          onPointerMove={onTimelinePointerMove}
-          onPointerUp={onTimelinePointerUp}
-          onPointerCancel={onTimelinePointerUp}
-        >
-          {/* Base rail */}
-          <div className="vtl-rail" />
-
-          {/* Dimmed regions outside trim window */}
-          <div className="vtl-dim" style={{ left: 0, width: `${startPct}%` }} />
-          <div className="vtl-dim" style={{ left: `${endPct}%`, right: 0, width: "auto" }} />
-
-          {/* Active (in-trim) region */}
-          <div className="vtl-active" style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }} />
-
-          {/* Playhead */}
-          <div className="vtl-playhead" style={{ left: `${playPct}%` }} />
-
-          {/* Trim start handle */}
-          <div className="vtl-handle" style={{ left: `${startPct}%` }}>
-            <div className="vtl-handle-grip" />
-          </div>
-
-          {/* Trim end handle */}
-          <div className="vtl-handle" style={{ left: `${endPct}%` }}>
-            <div className="vtl-handle-grip" />
-          </div>
-        </div>
-
-        <div className="veditor-timeline-timestamps">
-          <span>{fmtTime(0)}</span>
-          <span>{fmtTime(duration / 4)}</span>
-          <span>{fmtTime(duration / 2)}</span>
-          <span>{fmtTime(duration * 3 / 4)}</span>
-          <span>{fmtTime(duration)}</span>
-        </div>
       </div>
 
       {/* ── AUDIO TRACKS ───────────────────────────────────────────────── */}
@@ -380,9 +397,9 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           &nbsp;·&nbsp;
           {fmtTime(clipLen)}
           {tracks.some(t => t.deleted) &&
-            ` · ${tracks.filter(t => t.deleted).length} track(s) removed`}
+            ` · ${tracks.filter(t => t.deleted).length} track${tracks.filter(t => t.deleted).length > 1 ? "s" : ""} removed`}
         </span>
-        <button className="veditor-cancel"  onClick={onCancel}>Cancel</button>
+        <button className="veditor-cancel" onClick={onCancel}>Cancel</button>
         <button className="veditor-confirm" onClick={confirm}>Confirm &amp; Back to Settings</button>
       </div>
     </div>
