@@ -1,5 +1,6 @@
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use tauri::Emitter;
 
@@ -8,11 +9,9 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Extension trait to suppress the console window on Windows.
 trait NoWindow {
     fn no_window(&mut self) -> &mut Self;
 }
-
 impl NoWindow for Command {
     fn no_window(&mut self) -> &mut Self {
         #[cfg(target_os = "windows")]
@@ -21,9 +20,6 @@ impl NoWindow for Command {
     }
 }
 
-/// Resolve a sidecar binary path.
-/// - Debug: looks in src-tauri/binaries/ with the target triple suffix (dev workflow)
-/// - Release: looks next to the running .exe using the plain name (Tauri strips the suffix on install)
 pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
     #[cfg(debug_assertions)]
     {
@@ -35,7 +31,6 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
         if bin.exists() { return Ok(bin); }
         return Err(format!("[dev] Binary not found at: {}", bin.display()));
     }
-
     #[cfg(not(debug_assertions))]
     {
         let filename = format!("{name}.exe");
@@ -52,33 +47,24 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
     }
 }
 
-/// Video file extensions we recognize.
 const VIDEO_EXTS: &[&str] = &["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"];
-
 fn is_video(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| VIDEO_EXTS.contains(&e.to_lowercase().as_str()))
         .unwrap_or(false)
 }
-
-/// Walk a directory recursively, collecting all video file paths.
 fn walk_videos(dir: &std::path::Path, out: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return; };
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.is_dir() {
-            walk_videos(&p, out);
-        } else if p.is_file() && is_video(&p) {
-            if let Some(s) = p.to_str() {
-                out.push(s.to_string());
-            }
+        if p.is_dir() { walk_videos(&p, out); }
+        else if p.is_file() && is_video(&p) {
+            if let Some(s) = p.to_str() { out.push(s.to_string()); }
         }
     }
 }
 
-/// Scan a folder recursively for video files.
-/// Returns a sorted Vec of absolute paths (empty if no videos found).
 #[tauri::command]
 pub fn scan_folder_for_videos(folder: String) -> Vec<String> {
     let p = std::path::Path::new(&folder);
@@ -89,7 +75,6 @@ pub fn scan_folder_for_videos(folder: String) -> Vec<String> {
     videos
 }
 
-/// Returns the file size in MB for a given path.
 #[tauri::command]
 pub fn get_file_size_mb(path: String) -> Result<f64, String> {
     let meta = std::fs::metadata(&path)
@@ -97,91 +82,69 @@ pub fn get_file_size_mb(path: String) -> Result<f64, String> {
     Ok(meta.len() as f64 / (1024.0 * 1024.0))
 }
 
-/// Opens the file's parent folder in the system file explorer and selects the file.
 #[tauri::command]
 pub fn show_in_folder(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
-    {
-        Command::new("explorer")
-            .args(["/select,", &path])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    Command::new("explorer").args(["/select,", &path]).spawn().map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .args(["-R", &path])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    Command::new("open").args(["-R", &path]).spawn().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
-    {
-        if let Some(parent) = std::path::Path::new(&path).parent() {
-            Command::new("xdg-open")
-                .arg(parent)
-                .spawn()
-                .map_err(|e| e.to_string())?;
-        }
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        Command::new("xdg-open").arg(parent).spawn().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
-/// Opens a folder directly in the system file explorer (no file selection).
-/// Used for batch output — we want to open the folder itself, not a parent.
 #[tauri::command]
 pub fn open_folder(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
-    {
-        Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    Command::new("explorer").arg(&path).spawn().map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    Command::new("open").arg(&path).spawn().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ── Structs ─────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, Clone)]
+pub struct AudioTrackInfo {
+    pub index:    usize,
+    pub label:    String,
+    pub language: String,
 }
 
 #[derive(serde::Serialize, Clone)]
 pub struct VideoInfo {
     pub duration_secs: f64,
-    pub size_mb: f64,
-    pub bitrate_kbps: f64,
-    pub width: u32,
-    pub height: u32,
+    pub size_mb:       f64,
+    pub bitrate_kbps:  f64,
+    pub width:         u32,
+    pub height:        u32,
+    pub audio_tracks:  Vec<AudioTrackInfo>,
 }
 
 #[derive(serde::Serialize, Clone)]
 pub struct EncodeProgress {
-    pub percent: f64,
+    pub percent:  f64,
     pub eta_secs: f64,
-    pub pass: u8,
+    pub pass:     u8,
 }
+
+// ── get_video_info ───────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo, String> {
     let ffprobe = resolve_bin(&app, "ffprobe")?;
 
+    // Format probe
     let fmt_out = Command::new(&ffprobe)
         .args(["-v", "quiet", "-print_format", "json", "-show_format", &input])
-        .no_window()
-        .output().map_err(|e| e.to_string())?;
+        .no_window().output().map_err(|e| e.to_string())?;
     let fmt_json: serde_json::Value =
         serde_json::from_slice(&fmt_out.stdout).map_err(|e| e.to_string())?;
     let fmt = &fmt_json["format"];
-
     let duration_secs = fmt["duration"]
         .as_str().and_then(|s| s.parse::<f64>().ok())
         .ok_or("Could not read duration")?;
@@ -192,27 +155,48 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
         .as_str().and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0) / 1000.0;
 
+    // Video stream probe
     let stream_out = Command::new(&ffprobe)
         .args(["-v", "quiet", "-print_format", "json",
                "-show_streams", "-select_streams", "v:0", &input])
-        .no_window()
-        .output().map_err(|e| e.to_string())?;
+        .no_window().output().map_err(|e| e.to_string())?;
     let stream_json: serde_json::Value =
         serde_json::from_slice(&stream_out.stdout).map_err(|e| e.to_string())?;
     let stream = &stream_json["streams"][0];
-
-    let raw_w = stream["width"].as_u64().unwrap_or(1920) as u32;
-    let raw_h = stream["height"].as_u64().unwrap_or(1080) as u32;
+    let raw_w  = stream["width"].as_u64().unwrap_or(1920) as u32;
+    let raw_h  = stream["height"].as_u64().unwrap_or(1080) as u32;
     let rotation = stream["tags"]["rotate"]
         .as_str().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
     let (width, height) = if rotation == 90 || rotation == 270 || rotation == -90 {
         (raw_h, raw_w)
-    } else {
-        (raw_w, raw_h)
-    };
+    } else { (raw_w, raw_h) };
 
-    Ok(VideoInfo { duration_secs, size_mb, bitrate_kbps, width, height })
+    // Audio stream probe
+    let audio_out = Command::new(&ffprobe)
+        .args(["-v", "quiet", "-print_format", "json",
+               "-show_streams", "-select_streams", "a", &input])
+        .no_window().output().map_err(|e| e.to_string())?;
+    let audio_json: serde_json::Value =
+        serde_json::from_slice(&audio_out.stdout).map_err(|e| e.to_string())?;
+    let audio_streams = audio_json["streams"].as_array();
+    let audio_tracks: Vec<AudioTrackInfo> = audio_streams
+        .map(|arr| arr.iter().enumerate().map(|(i, s)| {
+            let lang  = s["tags"]["language"].as_str().unwrap_or("").to_string();
+            let title = s["tags"]["title"].as_str()
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| if lang.is_empty() {
+                    format!("Track {}", i + 1)
+                } else {
+                    lang.clone()
+                });
+            AudioTrackInfo { index: i, label: title, language: lang }
+        }).collect())
+        .unwrap_or_default();
+
+    Ok(VideoInfo { duration_secs, size_mb, bitrate_kbps, width, height, audio_tracks })
 }
+
+// ── get_video_frames ─────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_video_frames(
@@ -226,8 +210,7 @@ pub async fn get_video_frames(
 
         let fmt_out = Command::new(&ffprobe)
             .args(["-v", "quiet", "-print_format", "json", "-show_format", &input])
-            .no_window()
-            .output().map_err(|e| e.to_string())?;
+            .no_window().output().map_err(|e| e.to_string())?;
         let fmt_json: serde_json::Value =
             serde_json::from_slice(&fmt_out.stdout).map_err(|e| e.to_string())?;
         let duration = fmt_json["format"]["duration"]
@@ -240,22 +223,20 @@ pub async fn get_video_frames(
             let ts_str = format!("{:.3}", ts);
             let out_path = std::env::temp_dir().join(format!("qe_orig_frame_{}.jpg", i));
             let out_str  = out_path.to_str().unwrap().to_string();
-
             Command::new(&ffmpeg)
                 .args(["-y", "-ss", &ts_str, "-i", &input,
                        "-vframes", "1", "-vf", "scale=1280:-2", "-q:v", "3", &out_str])
-                .no_window()
-                .output().map_err(|e| e.to_string())?;
-
+                .no_window().output().map_err(|e| e.to_string())?;
             let bytes = std::fs::read(&out_path)
                 .map_err(|e| format!("Frame {} read error: {}", i, e))?;
             frames.push(STANDARD.encode(bytes));
         }
         Ok(frames)
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await.map_err(|e| e.to_string())?
 }
+
+// ── get_encoded_frame ─────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_encoded_frame(
@@ -285,12 +266,9 @@ pub async fn get_encoded_frame(
         if fps != "original" { vf_parts.push(format!("fps={}", fps)); }
 
         let mut args: Vec<String> = vec![
-            "-y".into(), "-ss".into(), ts_str,
-            "-i".into(), input, "-t".into(), "2".into(),
+            "-y".into(), "-ss".into(), ts_str, "-i".into(), input, "-t".into(), "2".into(),
         ];
-        if !vf_parts.is_empty() {
-            args.extend(["-vf".into(), vf_parts.join(",")]);
-        }
+        if !vf_parts.is_empty() { args.extend(["-vf".into(), vf_parts.join(",")]); }
         args.extend([
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), bv,
@@ -299,22 +277,26 @@ pub async fn get_encoded_frame(
             "-an".into(), clip_s.clone(),
         ]);
         Command::new(&ffmpeg).args(&args).no_window().output().map_err(|e| e.to_string())?;
-
         Command::new(&ffmpeg)
             .args(["-y", "-i", &clip_s, "-vframes", "1", "-q:v", "3", &frame_s])
-            .no_window()
-            .output().map_err(|e| e.to_string())?;
+            .no_window().output().map_err(|e| e.to_string())?;
 
         if !frame.exists() || std::fs::metadata(&frame).map(|m| m.len()).unwrap_or(0) == 0 {
             return Err("Could not extract encoded frame".into());
         }
-
         let bytes = std::fs::read(&frame).map_err(|e| e.to_string())?;
         Ok(STANDARD.encode(bytes))
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await.map_err(|e| e.to_string())?
 }
+
+// ── encode_video_with_progress ───────────────────────────────────────────────
+//
+// New parameters (all optional / defaulted):
+//   trim_start      – start time in seconds (None = 0)
+//   trim_end        – end time in seconds   (None = full duration)
+//   deleted_tracks  – audio stream indices to drop (0-based among audio streams)
+//   volume_map      – map of audio stream index → volume percentage (100 = original)
 
 #[tauri::command]
 pub async fn encode_video_with_progress(
@@ -326,6 +308,10 @@ pub async fn encode_video_with_progress(
     audio_bitrate_kbps: u32,
     fps: String,
     duration_secs: f64,
+    trim_start: Option<f64>,
+    trim_end: Option<f64>,
+    deleted_tracks: Vec<usize>,
+    volume_map: HashMap<usize, u32>,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg      = resolve_bin(&app, "ffmpeg")?;
@@ -334,6 +320,19 @@ pub async fn encode_video_with_progress(
         let passlog     = std::env::temp_dir().join("qe_passlog");
         let passlog_str = passlog.to_str().unwrap().to_string();
 
+        // Trim arguments for input seeking
+        let mut trim_args: Vec<String> = vec![];
+        if let Some(ss) = trim_start {
+            if ss > 0.0 {
+                trim_args.extend(["-ss".into(), format!("{ss:.3}")]);
+            }
+        }
+
+        // -to is relative to -ss when placed before -i in fast-seek mode;
+        // we pass absolute time and let ffmpeg handle it correctly.
+        let to_val: Option<String> = trim_end.map(|te| format!("{te:.3}"));
+
+        // Video filter chain
         let mut vf_parts: Vec<String> = vec![];
         match resolution.as_str() {
             "1080p" => vf_parts.push("scale=-2:1080".into()),
@@ -347,38 +346,87 @@ pub async fn encode_video_with_progress(
             vec!["-vf".into(), vf_parts.join(",")]
         } else { vec![] };
 
+        // Determine active audio streams: all indices 0..N minus deleted_tracks.
+        // We don't know N here so we probe it from all audio streams that were
+        // returned by get_video_info (volume_map keys tell us the set).
+        // A simpler approach: iterate 0..16 and let FFmpeg silently skip missing ones.
+        // The deleted_tracks list tells us which to skip.
+        let max_audio = 16usize; // reasonable upper bound
+        let active_audio: Vec<usize> = (0..max_audio)
+            .filter(|i| !deleted_tracks.contains(i))
+            .collect();
+
+        // Build complex audio filtergraph for volume adjustments.
+        // Only needed if any active track has a non-100% volume.
+        let has_volume_changes = active_audio.iter().any(|i| {
+            volume_map.get(i).copied().unwrap_or(100) != 100
+        });
+
+        // ── Pass 1 ─────────────────────────────────────────────────────────
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 0.0, eta_secs: 0.0, pass: 1,
         });
 
-        let mut pass1: Vec<String> = vec!["-y".into(), "-i".into(), input.clone()];
+        let mut pass1: Vec<String> = trim_args.clone();
+        pass1.extend(["-y".into(), "-i".into(), input.clone()]);
+        if let Some(ref to) = to_val {
+            pass1.extend(["-to".into(), to.clone()]);
+        }
         pass1.extend(vf_arg.clone());
         pass1.extend([
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv.clone(),
             "-pass".into(), "1".into(),
             "-passlogfile".into(), passlog_str.clone(),
-            "-an".into(), "-f".into(), "null".into(), "NUL".into(),
+            "-an".into(), "-f".into(), "null".into(),
+            #[cfg(target_os = "windows")] "NUL".into(),
+            #[cfg(not(target_os = "windows"))] "/dev/null".into(),
         ]);
         let s1 = Command::new(&ffmpeg).args(&pass1)
-            .no_window()
-            .stderr(Stdio::null())
+            .no_window().stderr(Stdio::null())
             .status().map_err(|e| e.to_string())?;
         if !s1.success() { return Err("FFmpeg pass 1 failed".into()); }
 
+        // ── Pass 2 ─────────────────────────────────────────────────────────
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 50.0, eta_secs: 0.0, pass: 2,
         });
 
-        let mut pass2: Vec<String> = vec![
+        let mut pass2: Vec<String> = trim_args;
+        pass2.extend([
             "-y".into(), "-i".into(), input,
             "-progress".into(), "pipe:1".into(),
             "-nostats".into(),
-        ];
+        ]);
+        if let Some(ref to) = to_val {
+            pass2.extend(["-to".into(), to.clone()]);
+        }
         pass2.extend(vf_arg);
+        pass2.extend(["-map".into(), "0:v:0".into()]);
+
+        if has_volume_changes {
+            // Build filtergraph: [0:a:N]volume=X.XX[aN]
+            let mut filter_parts: Vec<String> = vec![];
+            let mut out_labels: Vec<String> = vec![];
+            for (out_idx, &ai) in active_audio.iter().enumerate() {
+                let vol_pct = volume_map.get(&ai).copied().unwrap_or(100);
+                let vol_f   = vol_pct as f64 / 100.0;
+                let label   = format!("a{out_idx}");
+                filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
+                out_labels.push(format!("[{label}]"));
+            }
+            pass2.extend(["-filter_complex".into(), filter_parts.join(";".into())]);
+            for label in &out_labels {
+                pass2.extend(["-map".into(), label.clone()]);
+            }
+        } else {
+            // No volume changes — just map active audio streams directly
+            for &ai in &active_audio {
+                pass2.extend(["-map".into(), format!("0:a:{ai}?")]);
+            }
+        }
+
         pass2.extend([
-            "-map".into(), "0:v:0".into(),
-            "-map".into(), "0:a".into(),
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv,
             "-pass".into(), "2".into(),
@@ -393,8 +441,7 @@ pub async fn encode_video_with_progress(
             .no_window()
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| e.to_string())?;
+            .spawn().map_err(|e| e.to_string())?;
 
         let stdout    = child.stdout.take().unwrap();
         let reader    = BufReader::new(stdout);
@@ -412,7 +459,6 @@ pub async fn encode_video_with_progress(
                     let eta = if p2_fraction > 0.02 {
                         (elapsed / p2_fraction) * (1.0 - p2_fraction)
                     } else { 0.0 };
-
                     if pct - last_pct >= 0.5 {
                         last_pct = pct;
                         let _ = app.emit("encode-progress", EncodeProgress {
@@ -422,13 +468,11 @@ pub async fn encode_video_with_progress(
                 }
             }
         }
-
         child.wait().map_err(|e| e.to_string())?;
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 100.0, eta_secs: 0.0, pass: 2,
         });
         Ok("Done".into())
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await.map_err(|e| e.to_string())?
 }
