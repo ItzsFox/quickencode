@@ -94,6 +94,113 @@ const DiscordIcon = () => (
 
 type Screen = "drop" | "loading" | "editor" | "batch" | "done" | "batch-done";
 
+// ── Sub-components lifted outside App to prevent remount on every render ──
+
+interface WordmarkProps { size?: "sm" | "base"; }
+function Wordmark({ size = "base" }: WordmarkProps) {
+  return (
+    <div className={`wordmark wordmark-${size}`}>
+      <QELogo size={size === "sm" ? 14 : 17} />
+      <span>quick encode<em>.</em></span>
+    </div>
+  );
+}
+
+interface ThemeBtnProps { theme: "light" | "dark"; onToggle: (e: React.MouseEvent) => void; }
+function ThemeBtn({ theme, onToggle }: ThemeBtnProps) {
+  return (
+    <button className="theme-toggle" onClick={onToggle} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`} aria-label="Toggle theme">
+      {theme === "light" ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="5"/>
+          <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+          <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+      )}
+    </button>
+  );
+}
+
+interface QualitySettingsProps {
+  quality: number;
+  resolution: string;
+  format: string;
+  audio: number;
+  fps: string;
+  theme: "light" | "dark";
+  onQuality: (v: number) => void;
+  onRes: (v: string) => void;
+  onFmt: (v: string) => void;
+  onAudio: (v: number) => void;
+  onFps: (v: string) => void;
+}
+function QualitySettings({ quality, resolution, format, audio, fps, theme, onQuality, onRes, onFmt, onAudio, onFps }: QualitySettingsProps) {
+  const ql = qualityInfo(quality);
+  const isDark = theme === "dark";
+  const bg = (val: number, min: number, max: number) =>
+    sliderBg(val, min, max, isDark ? "#888888" : "#555555", isDark ? "#333336" : "#d0d0d0");
+  return (
+    <>
+      <div className="quality-col">
+        <div className="quality-header">
+          <span className="section-label">Quality</span>
+          <div className="quality-values">
+            <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
+            <span className="q-pct">{quality}%</span>
+          </div>
+        </div>
+        <input type="range" min={5} max={100} value={quality}
+          style={{ background: bg(quality, 5, 100) }}
+          onChange={e => onQuality(Number(e.target.value))}
+        />
+        <div className="range-labels"><span>Smallest</span><span>Best</span></div>
+      </div>
+      <div className="settings-divider" />
+      <div className="options-col">
+        <div className="options-grid">
+          <div className="setting"><label>Resolution</label>
+            <select value={resolution} onChange={e => onRes(e.target.value)}>
+              <option value="original">Original</option>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+            </select>
+          </div>
+          <div className="setting"><label>Format</label>
+            <select value={format} onChange={e => onFmt(e.target.value)}>
+              <option value="mp4">MP4</option>
+              <option value="mkv">MKV</option>
+              <option value="webm">WebM</option>
+            </select>
+          </div>
+          <div className="setting"><label>Audio</label>
+            <select value={audio} onChange={e => onAudio(Number(e.target.value))}>
+              <option value={64}>64 kbps</option>
+              <option value={128}>128 kbps</option>
+              <option value={192}>192 kbps</option>
+              <option value={256}>256 kbps</option>
+            </select>
+          </div>
+          <div className="setting"><label>FPS</label>
+            <select value={fps} onChange={e => onFps(e.target.value)}>
+              <option value="original">Original</option>
+              <option value="60">60 fps</option>
+              <option value="30">30 fps</option>
+              <option value="24">24 fps</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function App() {
   const initTheme = (): "light" | "dark" => {
     try { return (localStorage.getItem("qe_theme") as "light" | "dark") ?? "light"; }
@@ -131,13 +238,21 @@ export default function App() {
   const [status, setStatus]         = useState("");
   const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
 
-  const [batchFiles, setBatchFiles]             = useState<BatchFile[]>([]);
-  const [batchProgress, setBatchProgress]       = useState<{idx: number; enc: EncodeProgress; currentFile: string} | null>(null);
-  const [batchRunning, setBatchRunning]         = useState(false);
-  const [, setBatchDiscordMode]                 = useState(false);
-  const [batchDoneResult, setBatchDoneResult]   = useState<BatchDoneResult | null>(null);
+  const [batchFiles, setBatchFiles]           = useState<BatchFile[]>([]);
+  const [batchProgress, setBatchProgress]     = useState<{idx: number; enc: EncodeProgress; currentFile: string} | null>(null);
+  const [batchRunning, setBatchRunning]       = useState(false);
+  const [batchDoneResult, setBatchDoneResult] = useState<BatchDoneResult | null>(null);
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track mounted state to avoid setState on unmounted component
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (encDebounce.current) clearTimeout(encDebounce.current);
+    };
+  }, []);
 
   const base    = resolution === "original" ? (info?.bitrate_kbps ?? 5000) : RES_BITRATES[resolution];
   const videoBr = Math.max(Math.round(base * (quality / 100)), 80);
@@ -157,24 +272,28 @@ export default function App() {
           input: filePath, timestamp: ts, resolution: res,
           videoBitrateKbps: vbr, fps: f,
         });
-        setEncFrames(prev => ({ ...prev, [idx]: result }));
+        if (mountedRef.current) setEncFrames(prev => ({ ...prev, [idx]: result }));
       } catch (e) {
-        setStatus(`Preview failed: ${e}`);
+        if (mountedRef.current) setStatus(`Preview failed: ${e}`);
       } finally {
-        setEncLoading(false);
+        if (mountedRef.current) setEncLoading(false);
       }
     }, 600);
   }, [filePath, info]);
 
+  // Re-fetch preview when any setting that affects encoding changes
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     setEncFrames({});
     loadEncodedFrame(frameIdx, videoBr, resolution, fps);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoBr, resolution, fps, screen]);
 
+  // Fetch preview for newly selected frame if not yet cached
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameIdx]);
 
   const loadFile = useCallback(async (path: string) => {
@@ -200,7 +319,7 @@ export default function App() {
       setStatus(`❌ ${e}`);
       setScreen("drop");
     }
-  }, [resolution, quality, fps]);
+  }, [resolution, quality, fps, loadEncodedFrame]);
 
   const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
     const videos: string[] = [];
@@ -225,7 +344,9 @@ export default function App() {
       if (t === "leave") setDragOver(false);
       if (t === "drop") {
         setDragOver(false);
-        const raw = (ev.payload as any).paths as string[];
+        // Tauri's drop payload carries `paths` at runtime; narrow via type assertion
+        const dropPayload = ev.payload as { type: "drop"; paths: string[] };
+        const raw = dropPayload.paths;
         if (!raw?.length) return;
         const resolved = await resolveDroppedPaths(raw);
         if (!resolved.length) {
@@ -295,7 +416,13 @@ export default function App() {
   const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
   const handleDiscord = async () => {
     if (!info) return;
-    if (info.size_mb <= 10) { setStatus("✅ Already under 10 MB — no compression needed."); return; }
+    // Skip compression only if file is already at or below the DISCORD_TARGET (9 MB).
+    // We deliberately target 9 MB (not 10) because the encoder can overshoot slightly,
+    // and Discord rejects anything over 10 MB — even 10.1 MB.
+    if (info.size_mb <= DISCORD_TARGET) {
+      setStatus(`✅ Already under ${DISCORD_TARGET} MB — no compression needed.`);
+      return;
+    }
     const vbr = discordBr(info.duration_secs);
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
@@ -305,12 +432,16 @@ export default function App() {
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
     setBatchRunning(true);
+    // Seed progress so the overlay renders immediately on first file
+    setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     let succeeded = 0;
     let failed = 0;
     for (let i = 0; i < batchFiles.length; i++) {
       const file = batchFiles[i];
       setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "active" } : f));
       setBatchProgress({ idx: i, enc: { percent: 0, eta_secs: 0, pass: 1 }, currentFile: basename(file.path) });
+      // Reset progress for each new file so the bar starts fresh
+      setProgress({ percent: 0, eta_secs: 0, pass: 1 });
       const inName  = basename(file.path).replace(/\.[^.]+$/, "");
       const suffix  = discordMode ? "_discord" : "_encoded";
       const outFile = `${outputDir}/${inName}${suffix}.mp4`;
@@ -338,6 +469,7 @@ export default function App() {
     }
     setBatchRunning(false);
     setBatchProgress(null);
+    setProgress(null);
     setBatchDoneResult({ total: batchFiles.length, succeeded, failed, outputDir });
     setScreen("batch-done");
   };
@@ -345,7 +477,6 @@ export default function App() {
   const startBatch = async (discordMode = false) => {
     const dir = await open({ directory: true, multiple: false }) as string | null;
     if (!dir) return;
-    setBatchDiscordMode(discordMode);
     runBatch(dir, discordMode);
   };
 
@@ -366,100 +497,11 @@ export default function App() {
     setOrigFrames([]); setEncFrames({}); setFrameIdx(0);
     setStatus(""); setProgress(null); setEncoding(false);
     setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
-    setBatchDiscordMode(false); setDoneResult(null); setBatchDoneResult(null);
+    setDoneResult(null); setBatchDoneResult(null);
   };
 
-  const ql          = qualityInfo(quality);
   const currentOrig = origFrames[frameIdx];
   const currentEnc  = encFrames[frameIdx];
-
-  const slBg = (val: number, min: number, max: number) => {
-    const isDark = theme === "dark";
-    return sliderBg(val, min, max,
-      isDark ? "#888888" : "#555555",
-      isDark ? "#333336" : "#d0d0d0"
-    );
-  };
-
-  const Wordmark = ({ size = "base" }: { size?: "sm" | "base" }) => (
-    <div className={`wordmark wordmark-${size}`}>
-      <QELogo size={size === "sm" ? 14 : 17} />
-      <span>quick encode<em>.</em></span>
-    </div>
-  );
-
-  const ThemeBtn = () => (
-    <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`} aria-label="Toggle theme">
-      {theme === "light" ? (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-        </svg>
-      ) : (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="5"/>
-          <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-          <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-        </svg>
-      )}
-    </button>
-  );
-
-  const QualitySettings = () => (
-    <>
-      <div className="quality-col">
-        <div className="quality-header">
-          <span className="section-label">Quality</span>
-          <div className="quality-values">
-            <span className={`q-badge ${ql.cls}`}>{ql.label}</span>
-            <span className="q-pct">{quality}%</span>
-          </div>
-        </div>
-        <input type="range" min={5} max={100} value={quality}
-          style={{ background: slBg(quality, 5, 100) }}
-          onChange={e => setQuality(Number(e.target.value))}
-        />
-        <div className="range-labels"><span>Smallest</span><span>Best</span></div>
-      </div>
-      <div className="settings-divider" />
-      <div className="options-col">
-        <div className="options-grid">
-          <div className="setting"><label>Resolution</label>
-            <select value={resolution} onChange={e => setRes(e.target.value)}>
-              <option value="original">Original</option>
-              <option value="1080p">1080p</option>
-              <option value="720p">720p</option>
-              <option value="480p">480p</option>
-            </select>
-          </div>
-          <div className="setting"><label>Format</label>
-            <select value={format} onChange={e => setFmt(e.target.value)}>
-              <option value="mp4">MP4</option>
-              <option value="mkv">MKV</option>
-              <option value="webm">WebM</option>
-            </select>
-          </div>
-          <div className="setting"><label>Audio</label>
-            <select value={audio} onChange={e => setAudio(Number(e.target.value))}>
-              <option value={64}>64 kbps</option>
-              <option value={128}>128 kbps</option>
-              <option value={192}>192 kbps</option>
-              <option value={256}>256 kbps</option>
-            </select>
-          </div>
-          <div className="setting"><label>FPS</label>
-            <select value={fps} onChange={e => setFps(e.target.value)}>
-              <option value="original">Original</option>
-              <option value="60">60 fps</option>
-              <option value="30">30 fps</option>
-              <option value="24">24 fps</option>
-            </select>
-          </div>
-        </div>
-      </div>
-    </>
-  );
 
   // Aspect ratio from video dimensions — used to size preview boxes exactly
   const previewAspect = info ? info.width / info.height : 16 / 9;
@@ -470,7 +512,7 @@ export default function App() {
       {/* ── DROP ── */}
       {screen === "drop" && (
         <div className={`drop-screen${dragOver ? " drag-over" : ""}`} onClick={pickFiles}>
-          <div className="drop-theme-btn"><ThemeBtn /></div>
+          <div className="drop-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
           <div className="drop-wordmark">
             <QELogo size={36} />
             <h1>quick encode<em>.</em></h1>
@@ -510,7 +552,7 @@ export default function App() {
         const grew  = finalMb > originalMb;
         return (
           <div className="done-screen">
-            <div className="done-theme-btn"><ThemeBtn /></div>
+            <div className="done-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
             <div className="done-card">
               <div className="done-icon">
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -554,7 +596,7 @@ export default function App() {
       {/* ── BATCH DONE ── */}
       {screen === "batch-done" && batchDoneResult && (
         <div className="done-screen">
-          <div className="done-theme-btn"><ThemeBtn /></div>
+          <div className="done-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
           <div className="done-card">
             <div className="done-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -603,7 +645,7 @@ export default function App() {
             <Wordmark size="sm" />
             <div className="batch-topbar-right">
               <span className="batch-count">{batchFiles.length} file{batchFiles.length !== 1 ? "s" : ""}</span>
-              <ThemeBtn />
+              <ThemeBtn theme={theme} onToggle={toggleTheme} />
               <button className="file-chip" onClick={reset}>
                 <span>Clear all</span>
                 <span className="file-chip-x">&times;</span>
@@ -631,7 +673,10 @@ export default function App() {
 
           <div className="batch-bottom">
             <div className="batch-settings-row settings-row">
-              <QualitySettings />
+              <QualitySettings
+                quality={quality} resolution={resolution} format={format} audio={audio} fps={fps} theme={theme}
+                onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
+              />
             </div>
             <div className="batch-actions">
               <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>+ Add more</button>
@@ -662,7 +707,7 @@ export default function App() {
                 <span>{basename(filePath)}</span>
                 <span className="file-chip-x">&times;</span>
               </div>
-              <ThemeBtn />
+              <ThemeBtn theme={theme} onToggle={toggleTheme} />
               <span className="version-badge">v2.0</span>
             </div>
           </div>
@@ -736,7 +781,10 @@ export default function App() {
           </div>
 
           <div className="settings-row">
-            <QualitySettings />
+            <QualitySettings
+              quality={quality} resolution={resolution} format={format} audio={audio} fps={fps} theme={theme}
+              onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
+            />
           </div>
 
           <div className="bottom-bar">
@@ -750,7 +798,7 @@ export default function App() {
               title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
               <DiscordIcon />
               Discord Ready
-              <span className="preset-size">≤10 MB</span>
+              <span className="preset-size">≤9 MB</span>
             </button>
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
               {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
