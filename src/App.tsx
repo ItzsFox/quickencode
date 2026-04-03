@@ -563,6 +563,7 @@ export default function App() {
           filePath={filePath}
           info={info}
           theme={theme}
+          initialEdits={videoEdits}
           onConfirm={(edits) => {
             setVideoEdits(edits);
             setShowEditor(false);
