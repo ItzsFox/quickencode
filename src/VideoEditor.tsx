@@ -63,23 +63,26 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   const [tracks, setTracks] = useState(buildTracks);
 
   // ── State ────────────────────────────────────────────────────────────────
-  const [playing,         setPlaying]         = useState(false);
-  const [currentTime,     setCurrentTime]     = useState(0);
-  const [trimStart,       setTrimStart]       = useState(() => initialEdits?.trimStart ?? 0);
-  const [trimEnd,         setTrimEnd]         = useState(() => initialEdits?.trimEnd   ?? duration);
-  const [videoReady,      setVideoReady]      = useState(false);
-  // soloIdx: which row is the currently-previewed track (UI list index, not stream index)
-  const [soloIdx,         setSoloIdx]         = useState(0);
-  // activeSrc: the <video> src currently loaded — starts as the original file,
-  // switches to a temp extraction when the user clicks a different track row.
-  const [activeSrc,       setActiveSrc]       = useState(() => convertFileSrc(filePath));
-  const [switchingTrack,  setSwitchingTrack]  = useState(false);
+  const [playing,        setPlaying]        = useState(false);
+  const [currentTime,    setCurrentTime]    = useState(0);
+  const [trimStart,      setTrimStart]      = useState(() => initialEdits?.trimStart ?? 0);
+  const [trimEnd,        setTrimEnd]        = useState(() => initialEdits?.trimEnd   ?? duration);
+  const [videoReady,     setVideoReady]     = useState(false);
+  const [soloIdx,        setSoloIdx]        = useState(0);
+  const [switchingTrack, setSwitchingTrack] = useState(false);
 
-  const trimStartRef = useRef(trimStart);
-  const trimEndRef   = useRef(trimEnd);
-  const savedTimeRef = useRef(0); // preserve playhead across src swap
+  const trimStartRef  = useRef(trimStart);
+  const trimEndRef    = useRef(trimEnd);
+  // Carry the playhead across an imperative src swap
+  const savedTimeRef  = useRef(0);
+  // If video was playing when track switch started, resume after canplay
+  const resumeRef     = useRef(false);
+  // Track the current solo index in a ref so callbacks always read fresh value
+  const soloIdxRef    = useRef(soloIdx);
+
   useEffect(() => { trimStartRef.current = trimStart; }, [trimStart]);
   useEffect(() => { trimEndRef.current   = trimEnd;   }, [trimEnd]);
+  useEffect(() => { soloIdxRef.current   = soloIdx;   }, [soloIdx]);
 
   const dragging = useRef<"start" | "end" | null>(null);
 
@@ -88,95 +91,35 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   const emptyColor = isDark ? "#333336" : "#d0d0d0";
   const multiTrack = tracks.length > 1;
 
-  // ── Clear stale temp extractions when editor opens/closes ───────────────────
+  // ── Clear stale temp extractions when editor opens/closes ───────────────
   useEffect(() => {
-    // clear on mount so a new file always gets fresh extractions
     invoke("clear_preview_track_cache").catch(() => {});
-    return () => {
-      // clear on unmount to avoid temp file buildup
-      invoke("clear_preview_track_cache").catch(() => {});
-    };
+    return () => { invoke("clear_preview_track_cache").catch(() => {}); };
   }, [filePath]);
 
-  // ── Switch preview to a different audio track ─────────────────────────────
+  // ── Video event listeners (attached once, never re-attached) ────────────
   //
-  // The browser <video> element always mixes ALL audio streams from an MP4
-  // into one composite signal — there is no way to mute individual streams
-  // through the HTML5 API.  The only real solution is to hand a separate
-  // temporary MP4 (containing just the chosen stream) to the <video> tag.
-  //
-  // We call extract_audio_track(input, stream_index) which ffmpeg-muxes a
-  // new MP4 with -map 0:v:0 -map 0:a:<N> -c copy, then return its path.
-  // We cache one file per stream index in the OS temp dir so subsequent
-  // clicks on the same row are instant.
-  const switchSolo = useCallback(async (listIdx: number) => {
-    if (listIdx === soloIdx) return;
-    const track = tracks[listIdx];
-    if (!track || track.deleted) return;
-
-    // Row 0 maps back to the original file (stream index 0 = the same as the
-    // full file when it has only one audio track, but for multi-track files
-    // the original src mixes all of them, so we always extract to be precise).
-    setSoloIdx(listIdx);
-    setSwitchingTrack(true);
-
-    // save current playhead
-    savedTimeRef.current = videoRef.current?.currentTime ?? 0;
-    const wasPlaying = !videoRef.current?.paused;
-    videoRef.current?.pause();
-
-    try {
-      const tmpPath = await invoke<string>("extract_audio_track", {
-        input:             filePath,
-        audioStreamIndex: track.index,
-      });
-      setActiveSrc(convertFileSrc(tmpPath));
-    } catch (err) {
-      console.warn("extract_audio_track failed, staying on current src", err);
-    } finally {
-      setSwitchingTrack(false);
-      // restore playhead + playing state after the new src loads (handled in onCanPlay)
-      if (wasPlaying) {
-        // flag the video to auto-play when it becomes ready after the src swap
-        if (videoRef.current) (videoRef.current as any)._resumeAfterSwap = true;
-      }
-    }
-  }, [soloIdx, tracks, filePath]);
-
-  // ── Apply volume of the solo track to video.volume ──────────────────────
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const t = tracks[soloIdx];
-    if (!t || t.deleted) { v.volume = 0; return; }
-    v.volume = Math.min(1, Math.max(0, t.volume / 200));
-  }, [tracks, soloIdx]);
-
-  // When the soloed track is deleted, auto-switch to next active
-  useEffect(() => {
-    if (tracks[soloIdx]?.deleted) {
-      const next = tracks.findIndex((t, i) => i !== soloIdx && !t.deleted);
-      if (next >= 0) switchSolo(next);
-    }
-  }, [tracks, soloIdx, switchSolo]);
-
-  // ── Video event listeners ────────────────────────────────────────────────
+  // IMPORTANT: we do NOT use key={src} on the <video> element. Changing `key`
+  // forces React to unmount+remount the DOM node, which destroys these
+  // listeners and breaks playback. Instead we imperatively set video.src +
+  // video.load() inside switchSolo so the element is preserved.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
     const onCanPlay = () => {
       setVideoReady(true);
-      // restore playhead after a src swap
+      // Restore playhead that was saved before the src swap
       if (savedTimeRef.current > 0) {
-        v.currentTime = savedTimeRef.current;
+        try { v.currentTime = savedTimeRef.current; } catch {}
       }
-      // resume playback if it was playing before the swap
-      if ((v as any)._resumeAfterSwap) {
-        delete (v as any)._resumeAfterSwap;
+      // Resume if video was playing before the track switch
+      if (resumeRef.current) {
+        resumeRef.current = false;
         v.play().catch(() => {});
       }
     };
+
     const onTime = () => {
       setCurrentTime(v.currentTime);
       if (v.currentTime >= trimEndRef.current) {
@@ -185,9 +128,10 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
         setPlaying(false);
       }
     };
+
     const onPlay  = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => setVideoReady(true);
+    const onError = () => { setVideoReady(true); setSwitchingTrack(false); };
 
     v.addEventListener("canplay",    onCanPlay);
     v.addEventListener("timeupdate", onTime);
@@ -201,14 +145,77 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
       v.removeEventListener("pause",      onPause);
       v.removeEventListener("error",      onError);
     };
-  }, [activeSrc]); // re-attach when src changes
+  }, []); // ← empty dep array: attach exactly once
 
-  // reset videoReady when src switches so loading spinner shows
+  // ── Apply volume of the solo track to video.volume ──────────────────────
   useEffect(() => {
-    setVideoReady(false);
-  }, [activeSrc]);
+    const v = videoRef.current;
+    if (!v) return;
+    const t = tracks[soloIdx];
+    if (!t || t.deleted) { v.volume = 0; return; }
+    v.volume = Math.min(1, Math.max(0, t.volume / 200));
+  }, [tracks, soloIdx]);
 
-  // ── Play / pause ────────────────────────────────────────────────────────────
+  // When the soloed track gets deleted, auto-switch to next active track
+  useEffect(() => {
+    if (tracks[soloIdx]?.deleted) {
+      const next = tracks.findIndex((t, i) => i !== soloIdx && !t.deleted);
+      if (next >= 0) switchSolo(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracks]);
+
+  // ── Switch preview to a different audio track (imperative src swap) ──────
+  //
+  // The browser <video> element mixes ALL audio streams from an MP4 into one
+  // composite — individual streams cannot be muted via the HTML5 API.  We
+  // solve this by feeding the element a temp MP4 that contains only the
+  // chosen audio stream (extracted by ffmpeg, stream-copied, fast).
+  //
+  // Crucially: we do NOT change React state for the src.  Instead we mutate
+  // video.src directly and call video.load().  This preserves the DOM node
+  // and all attached event listeners so playback resumes correctly.
+  const switchSolo = useCallback(async (listIdx: number) => {
+    if (listIdx === soloIdxRef.current) return;
+    const track = tracks[listIdx];
+    if (!track || track.deleted) return;
+
+    const v = videoRef.current;
+    if (!v) return;
+
+    // 1. Snapshot current state before touching the element
+    savedTimeRef.current = v.currentTime;
+    resumeRef.current    = !v.paused;
+
+    // 2. Pause immediately so we don't get a stutter on the old audio
+    v.pause();
+    setSoloIdx(listIdx);
+    setSwitchingTrack(true);
+    setVideoReady(false);
+
+    try {
+      const tmpPath = await invoke<string>("extract_audio_track", {
+        input:             filePath,
+        audioStreamIndex: track.index,
+      });
+
+      // 3. Imperatively swap the src — the <video> element stays mounted
+      v.src = convertFileSrc(tmpPath);
+      v.load(); // triggers canplay → onCanPlay restores time + resumes
+    } catch (err) {
+      console.warn("extract_audio_track failed, staying on current src", err);
+      // Restore state on failure
+      setSoloIdx(soloIdxRef.current);
+      resumeRef.current = false;
+      setVideoReady(true);
+    } finally {
+      setSwitchingTrack(false);
+    }
+  // tracks and filePath are stable for the lifetime of the editor session
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracks, filePath]);
+
+  // ── Play / pause ────────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -220,7 +227,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     }
   }, []);
 
-  // ── Space bar ──────────────────────────────────────────────────────────────
+  // ── Space bar ──────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
@@ -232,7 +239,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlay]);
 
-  // ── Timeline pointer helpers ──────────────────────────────────────────────
+  // ── Timeline pointer helpers ─────────────────────────────────────────────
   const pxToTime = useCallback((clientX: number): number => {
     const el = timelineRef.current;
     if (!el || duration <= 0) return 0;
@@ -297,7 +304,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     }
   }, []);
 
-  // ── Audio helpers ──────────────────────────────────────────────────────────
+  // ── Audio helpers ─────────────────────────────────────────────────────────
   const handleVolume  = (i: number, v: number) =>
     setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, volume: v } : t));
   const handleDelete  = (i: number) =>
@@ -305,20 +312,20 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   const handleRestore = (i: number) =>
     setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, deleted: false } : t));
 
-  // ── Confirm ─────────────────────────────────────────────────────────────────
+  // ── Confirm ───────────────────────────────────────────────────────────────
   const confirm = () => onConfirm({
     trimStart,
     trimEnd,
     audioTracks: tracks.map(t => ({ index: t.index, volume: t.volume, deleted: t.deleted })),
   });
 
-  // ── Derived ──────────────────────────────────────────────────────────────────
+  // ── Derived ───────────────────────────────────────────────────────────────
   const playPct  = duration > 0 ? (currentTime / duration) * 100 : 0;
   const startPct = duration > 0 ? (trimStart   / duration) * 100 : 0;
   const endPct   = duration > 0 ? (trimEnd     / duration) * 100 : 100;
   const clipLen  = trimEnd - trimStart;
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="veditor-overlay">
 
@@ -334,12 +341,11 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
         </div>
       </div>
 
-      {/* VIDEO */}
+      {/* VIDEO — no `key` prop: we never remount this element */}
       <div className="veditor-video-wrap">
         <video
-          key={activeSrc}  /* force React to remount when src changes */
           ref={videoRef}
-          src={activeSrc}
+          src={convertFileSrc(filePath)}
           preload="auto"
           playsInline
           tabIndex={-1}
@@ -451,7 +457,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
                   {!t.deleted && t.volume > 0 && <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>}
                 </svg>
 
-                {/* Track name — real label from ffprobe */}
+                {/* Track name */}
                 <span className="veditor-track-label" title={t.label}>{t.label}</span>
 
                 {t.deleted ? (
@@ -509,10 +515,11 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
           &nbsp;·&nbsp;
           {fmtTime(clipLen)}
           {tracks.some(t => t.deleted) &&
-            ` · ${tracks.filter(t => t.deleted).length} track${tracks.filter(t => t.deleted).length > 1 ? "s" : ""} removed`}
+            ` · ${tracks.filter(t => t.deleted).length} track${tracks.filter(t => t.deleted).length > 1 ? "s" : ""} removed`
+          }
         </span>
         <button className="veditor-cancel" onClick={onCancel}>Cancel</button>
-        <button className="veditor-confirm" onClick={confirm}>Confirm &amp; Back to Settings</button>
+        <button className="veditor-confirm" onClick={confirm}>Confirm &amp; Back</button>
       </div>
     </div>
   );
