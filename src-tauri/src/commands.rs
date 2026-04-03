@@ -106,7 +106,7 @@ pub fn open_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-// ── Structs ───────────────────────────────────────────────────────────────────
+// ── Structs ──────────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
 pub struct AudioTrackInfo {
@@ -132,64 +132,81 @@ pub struct EncodeProgress {
     pub pass:     u8,
 }
 
-// ── get_video_info ───────────────────────────────────────────────────────────────
+// ── audio_label ──────────────────────────────────────────────────────────────────
 
-/// Returns the best human-readable label for an audio stream.
+/// Pick the best human-readable label for an audio stream.
 ///
-/// Priority order (first non-empty, non-"und" value wins):
-///   1. tags.title          – set by most encoders for named tracks (e.g. OBS)
-///   2. tags.handler_name   – Windows / MP4 handler name
-///                            (e.g. "System sounds", "Microphone")
-///                            Generic/codec-only values are skipped.
-///   3. tags.language       – ISO 639 language code (e.g. "eng", "jpn")
-///   4. "Track N"           – final fallback
+/// Priority (first non-empty, non-"und" value wins):
+///   1. tags.title        – explicit user-set track name
+///   2. tags.name         – MKV track name tag
+///   3. tags.handler_name – MP4 handler name (e.g. "System Sounds", "Microphone")
+///                          Generic codec-only strings are skipped (see blocklist).
+///   4. tags.language     – ISO 639 code
+///   5. "Track N"         – final fallback
+///
+/// The blocklist rejects only values that are internal codec/container
+/// identifiers and carry no descriptive meaning to the user.
+/// Real names like "System Sounds" and "Microphone" always pass through.
 fn audio_label(stream: &serde_json::Value, one_based_index: usize) -> String {
     let tags = &stream["tags"];
 
+    // Returns Some(trimmed) only if the value is non-empty and not "und"/null.
     let valid = |s: &str| -> Option<String> {
         let t = s.trim();
-        if t.is_empty() || t.eq_ignore_ascii_case("und") || t.eq_ignore_ascii_case("\0") {
+        if t.is_empty()
+            || t.eq_ignore_ascii_case("und")
+            || t.chars().all(|c| c == '\0')
+        {
             None
         } else {
             Some(t.to_string())
         }
     };
 
+    // Returns true when a handler_name value is a known generic codec/container
+    // identifier that carries no meaningful description for the user.
+    // IMPORTANT: only match exact or very specific substrings so that
+    // descriptive names like "System Sounds" are never blocked.
+    let is_generic_handler = |v: &str| -> bool {
+        let lo = v.to_lowercase();
+        // Remove whitespace to catch both "SoundHandler" and "Sound Handler"
+        let compact: String = lo.chars().filter(|c| !c.is_whitespace()).collect();
+        compact == "soundhandler"
+            || compact == "soundhandle"      // truncated variant seen in some DVR files
+            || compact == "videohandler"
+            || compact == "videohandle"
+            || lo == "iso media file produced by google inc."
+            || lo == "iso media"
+            || lo.starts_with("mp4a")
+            || lo.starts_with("mpeg")
+            || lo == "aac"
+            || lo == "vorbis"
+            || lo == "opus"
+    };
+
     // 1. title
     if let Some(v) = tags["title"].as_str().and_then(|s| valid(s)) {
         return v;
     }
-
-    // 2. handler_name  (Windows MP4 / MKV captures)
-    //    Skip values that are just codec/container identifiers and carry no
-    //    meaningful track name. The list covers both spaced and camelCase
-    //    variants that ffprobe surfaces in the wild.
+    // 2. name (MKV)
+    if let Some(v) = tags["name"].as_str().and_then(|s| valid(s)) {
+        return v;
+    }
+    // 3. handler_name — skip generic codec strings, keep real descriptions
     if let Some(v) = tags["handler_name"].as_str().and_then(|s| valid(s)) {
-        let lower = v.to_lowercase();
-        // Remove all whitespace for the camelCase check
-        let compact: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
-        let generic =
-            compact.contains("soundhandler") ||
-            lower.contains("sound handler")  ||
-            lower.contains("iso media")       ||
-            lower.contains("mp4a")            ||
-            lower.contains("mpeg")            ||
-            lower.contains("aac")             ||
-            lower.contains("vorbis")          ||
-            lower.contains("opus");
-        if !generic {
+        if !is_generic_handler(&v) {
             return v;
         }
     }
-
-    // 3. language
+    // 4. language
     if let Some(v) = tags["language"].as_str().and_then(|s| valid(s)) {
         return v;
     }
-
-    // 4. fallback
+    // 5. fallback
     format!("Track {}", one_based_index)
 }
+
+// ── get_video_info ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo, String> {
@@ -220,20 +237,27 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
     let stream_json: serde_json::Value =
         serde_json::from_slice(&stream_out.stdout).map_err(|e| e.to_string())?;
     let stream = &stream_json["streams"][0];
-    let raw_w  = stream["width"].as_u64().unwrap_or(1920) as u32;
-    let raw_h  = stream["height"].as_u64().unwrap_or(1080) as u32;
+    let raw_w = stream["width"].as_u64().unwrap_or(1920) as u32;
+    let raw_h = stream["height"].as_u64().unwrap_or(1080) as u32;
     let rotation = stream["tags"]["rotate"]
         .as_str().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
     let (width, height) = if rotation == 90 || rotation == 270 || rotation == -90 {
         (raw_h, raw_w)
     } else { (raw_w, raw_h) };
 
-    // Audio stream probe — include tags so we can read title / handler_name
+    // Audio stream probe.
+    // We do NOT filter stream_tags to specific keys — we request ALL tags
+    // so that any tag key the encoder chose (title, name, handler_name, etc.)
+    // is available to audio_label. This is the fix for Xbox/Windows DVR files
+    // that store "System Sounds" / "Microphone" in handler_name.
     let audio_out = Command::new(&ffprobe)
-        .args(["-v", "quiet", "-print_format", "json",
-               "-show_streams", "-select_streams", "a",
-               "-show_entries", "stream=index,codec_name:stream_tags=title,handler_name,language",
-               &input])
+        .args([
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-select_streams", "a",
+            &input,
+        ])
         .no_window().output().map_err(|e| e.to_string())?;
     let audio_json: serde_json::Value =
         serde_json::from_slice(&audio_out.stdout).map_err(|e| e.to_string())?;
@@ -249,7 +273,7 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
     Ok(VideoInfo { duration_secs, size_mb, bitrate_kbps, width, height, audio_tracks })
 }
 
-// ── extract_audio_track ─────────────────────────────────────────────────────────────────
+// ── extract_audio_track ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn extract_audio_track(
@@ -262,7 +286,7 @@ pub async fn extract_audio_track(
 
         let out_path = std::env::temp_dir()
             .join(format!("qe_preview_track_{}.mp4", audio_stream_index));
-        let out_str  = out_path.to_str().unwrap().to_string();
+        let out_str = out_path.to_str().unwrap().to_string();
 
         if out_path.exists() {
             return Ok(out_str);
@@ -289,7 +313,6 @@ pub async fn extract_audio_track(
                 "ffmpeg failed to extract audio stream {audio_stream_index}"
             ));
         }
-
         Ok(out_str)
     })
     .await
@@ -312,7 +335,7 @@ pub fn clear_preview_track_cache() {
     }
 }
 
-// ── get_video_frames ───────────────────────────────────────────────────────────────────
+// ── get_video_frames ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_video_frames(
@@ -352,7 +375,7 @@ pub async fn get_video_frames(
     .await.map_err(|e| e.to_string())?
 }
 
-// ── get_encoded_frame ───────────────────────────────────────────────────────────────────
+// ── get_encoded_frame ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_encoded_frame(
@@ -406,7 +429,7 @@ pub async fn get_encoded_frame(
     .await.map_err(|e| e.to_string())?
 }
 
-// ── encode_video_with_progress ─────────────────────────────────────────────────────────────
+// ── encode_video_with_progress ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn encode_video_with_progress(
@@ -464,7 +487,6 @@ pub async fn encode_video_with_progress(
             volume_map.get(i).copied().unwrap_or(100) != 100
         });
 
-        // Pass 1
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 0.0, eta_secs: 0.0, pass: 1,
         });
@@ -521,7 +543,6 @@ pub async fn encode_video_with_progress(
         let s1 = child1.wait().map_err(|e| e.to_string())?;
         if !s1.success() { return Err("FFmpeg pass 1 failed".into()); }
 
-        // Pass 2
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 50.0, eta_secs: 0.0, pass: 2,
         });
