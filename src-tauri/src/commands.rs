@@ -134,16 +134,52 @@ pub struct EncodeProgress {
 
 // ── get_video_info ───────────────────────────────────────────────────────────
 
-/// Returns a human-readable label for an audio stream.
+/// Returns the best human-readable label for an audio stream.
+///
+/// Priority order (first non-empty, non-"und" value wins):
+///   1. tags.title          – set by most encoders for named tracks (e.g. OBS)
+///   2. tags.handler_name   – Windows / MP4 handler name (e.g. "System sounds",
+///                            "Microphone") — often richer than title on Windows captures
+///   3. tags.language       – ISO 639 language code (e.g. "eng", "jpn")
+///   4. "Track N"           – final fallback
 fn audio_label(stream: &serde_json::Value, one_based_index: usize) -> String {
-    let title = stream["tags"]["title"].as_str().unwrap_or("").trim().to_string();
-    if !title.is_empty() && title.to_lowercase() != "und" {
-        return title;
+    let tags = &stream["tags"];
+
+    // Helper: return Some(s) when s is non-empty and not the sentinel "und"
+    let valid = |s: &str| -> Option<String> {
+        let t = s.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("und") || t.eq_ignore_ascii_case("\0") {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    };
+
+    // 1. title
+    if let Some(v) = tags["title"].as_str().and_then(|s| valid(s)) {
+        return v;
     }
-    let lang = stream["tags"]["language"].as_str().unwrap_or("").trim().to_string();
-    if !lang.is_empty() && lang.to_lowercase() != "und" {
-        return lang;
+    // 2. handler_name  (Windows MP4 / MKV game captures)
+    if let Some(v) = tags["handler_name"].as_str().and_then(|s| valid(s)) {
+        // Some encoders put the codec name here (e.g. "SoundHandler", "ISO Media file").
+        // Skip obviously-generic handler names.
+        let lower = v.to_lowercase();
+        let generic = lower.contains("sound handler") ||
+                      lower.contains("iso media")      ||
+                      lower.contains("mp4a")            ||
+                      lower.contains("mpeg")            ||
+                      lower.contains("aac")             ||
+                      lower.contains("vorbis")          ||
+                      lower.contains("opus");
+        if !generic {
+            return v;
+        }
     }
+    // 3. language
+    if let Some(v) = tags["language"].as_str().and_then(|s| valid(s)) {
+        return v;
+    }
+    // 4. fallback
     format!("Track {}", one_based_index)
 }
 
@@ -184,10 +220,12 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
         (raw_h, raw_w)
     } else { (raw_w, raw_h) };
 
-    // Audio stream probe
+    // Audio stream probe — include tags so we can read title / handler_name
     let audio_out = Command::new(&ffprobe)
         .args(["-v", "quiet", "-print_format", "json",
-               "-show_streams", "-select_streams", "a", &input])
+               "-show_streams", "-select_streams", "a",
+               "-show_entries", "stream=index,codec_name:stream_tags=title,handler_name,language",
+               &input])
         .no_window().output().map_err(|e| e.to_string())?;
     let audio_json: serde_json::Value =
         serde_json::from_slice(&audio_out.stdout).map_err(|e| e.to_string())?;
@@ -201,6 +239,90 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
         .unwrap_or_default();
 
     Ok(VideoInfo { duration_secs, size_mb, bitrate_kbps, width, height, audio_tracks })
+}
+
+// ── extract_audio_track ───────────────────────────────────────────────────────
+//
+// Extracts a single audio track from the source file into a temporary MP4 that
+// contains only that one audio stream (+ the video stream so the browser <video>
+// element can play it with a proper timeline).
+//
+// Called by the VideoEditor whenever the user switches the previewed track.
+// Returns the absolute path of the temp file so the frontend can use
+// convertFileSrc() on it.
+
+#[tauri::command]
+pub async fn extract_audio_track(
+    app: tauri::AppHandle,
+    input: String,
+    audio_stream_index: usize,  // 0-based index among audio streams
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ffmpeg = resolve_bin(&app, "ffmpeg")?;
+
+        // Use a fixed temp path per track index so we don't accumulate files
+        let out_path = std::env::temp_dir()
+            .join(format!("qe_preview_track_{}.mp4", audio_stream_index));
+        let out_str  = out_path.to_str().unwrap().to_string();
+
+        // If an up-to-date file already exists from a previous call for this
+        // track, return it immediately to avoid re-muxing on every click.
+        // We check existence only — input file changes will be caught because
+        // quickencode always re-opens a fresh session per file.
+        if out_path.exists() {
+            return Ok(out_str);
+        }
+
+        // Stream-copy both video and the requested audio stream.
+        // -map 0:v:0          — video stream 0
+        // -map 0:a:<N>        — the N-th audio stream (0-based among audio)
+        // -c copy             — no re-encode (fast)
+        // -movflags +faststart — seekable in the browser
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-i", &input,
+                "-map", "0:v:0",
+                "-map", &format!("0:a:{audio_stream_index}"),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                &out_str,
+            ])
+            .no_window()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| e.to_string())?;
+
+        if !status.success() {
+            return Err(format!(
+                "ffmpeg failed to extract audio stream {audio_stream_index}"
+            ));
+        }
+
+        Ok(out_str)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── clear_preview_track_cache ────────────────────────────────────────────────
+//
+// Deletes all qe_preview_track_*.mp4 temp files so the next video loaded gets
+// fresh extractions rather than stale ones from the previous session.
+
+#[tauri::command]
+pub fn clear_preview_track_cache() {
+    let tmp = std::env::temp_dir();
+    if let Ok(entries) = std::fs::read_dir(&tmp) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let s    = name.to_string_lossy();
+            if s.starts_with("qe_preview_track_") && s.ends_with(".mp4") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 // ── get_video_frames ─────────────────────────────────────────────────────────
@@ -298,23 +420,6 @@ pub async fn get_encoded_frame(
 }
 
 // ── encode_video_with_progress ───────────────────────────────────────────────
-//
-// BUG FIXES vs previous version:
-//
-// 1. -to was being passed as the absolute end timestamp (e.g. 45.0 seconds
-//    into the file) when -ss is placed BEFORE -input. When -ss precedes -i,
-//    ffmpeg resets the input clock to 0, so -to must be the DURATION of the
-//    desired clip, not the absolute end time.  We now compute:
-//      clip_duration = trim_end - trim_start  and pass  -t <clip_duration>
-//    instead of  -to <trim_end>.
-//
-// 2. active_audio was built from a hardcoded range 0..16, causing ffmpeg to
-//    try mapping non-existent audio streams 2-15, which made it error out
-//    (producing a 0-byte file).  We now only map streams 0..(total_audio_tracks
-//    as supplied by the caller), falling back to 1 if none are specified.
-//
-// 3. Pass 1 now pipes stderr so we can read out_time_ms lines and emit
-//    real 0-50% progress instead of jumping straight to 50%.
 
 #[tauri::command]
 pub async fn encode_video_with_progress(
@@ -329,9 +434,7 @@ pub async fn encode_video_with_progress(
     trim_start: Option<f64>,
     trim_end: Option<f64>,
     deleted_tracks: Vec<usize>,
-    // Keys are 0-based audio stream indices; values are volume percent (100 = unchanged).
     volume_map: HashMap<usize, u32>,
-    // Total number of audio streams in the source file — used to build valid -map args.
     total_audio_tracks: usize,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -341,9 +444,6 @@ pub async fn encode_video_with_progress(
         let passlog     = std::env::temp_dir().join("qe_passlog");
         let passlog_str = passlog.to_str().unwrap().to_string();
 
-        // ── Trim args ─────────────────────────────────────────────────────
-        // When -ss is placed BEFORE -i the input clock resets to 0, so we
-        // must use -t <duration> rather than -to <absolute_end_time>.
         let ss_val: Option<f64> = trim_start.filter(|&v| v > 0.0);
         let clip_duration: Option<f64> = match (trim_start, trim_end) {
             (Some(ss), Some(te)) if te > ss => Some(te - ss),
@@ -356,7 +456,6 @@ pub async fn encode_video_with_progress(
             trim_args.extend(["-ss".into(), format!("{ss:.6}")]);
         }
 
-        // ── Video filter ─────────────────────────────────────────────────
         let mut vf_parts: Vec<String> = vec![];
         match resolution.as_str() {
             "1080p" => vf_parts.push("scale=-2:1080".into()),
@@ -369,10 +468,6 @@ pub async fn encode_video_with_progress(
             vec!["-vf".into(), vf_parts.join(",")]
         } else { vec![] };
 
-        // ── Active audio streams ──────────────────────────────────────────
-        // Only consider streams that actually exist in the source.
-        // Fall back to treating the file as having 1 audio stream if the
-        // caller didn't provide a count (shouldn't happen but is safe).
         let real_track_count = if total_audio_tracks == 0 { 1 } else { total_audio_tracks };
         let active_audio: Vec<usize> = (0..real_track_count)
             .filter(|i| !deleted_tracks.contains(i))
@@ -382,7 +477,7 @@ pub async fn encode_video_with_progress(
             volume_map.get(i).copied().unwrap_or(100) != 100
         });
 
-        // ── Pass 1 ─────────────────────────────────────────────────────────
+        // Pass 1
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 0.0, eta_secs: 0.0, pass: 1,
         });
@@ -412,9 +507,9 @@ pub async fn encode_video_with_progress(
             .stderr(Stdio::null())
             .spawn().map_err(|e| e.to_string())?;
 
-        let stdout1    = child1.stdout.take().unwrap();
-        let reader1    = BufReader::new(stdout1);
-        let start1     = std::time::Instant::now();
+        let stdout1 = child1.stdout.take().unwrap();
+        let reader1 = BufReader::new(stdout1);
+        let start1  = std::time::Instant::now();
         let mut last_pct1 = 0.0f64;
         for line in reader1.lines().flatten() {
             if let Some(rest) = line.strip_prefix("out_time_ms=") {
@@ -424,8 +519,8 @@ pub async fn encode_video_with_progress(
                     let pct       = (secs_done / duration_secs).min(1.0) * 50.0;
                     let elapsed   = start1.elapsed().as_secs_f64();
                     let fraction  = pct / 50.0;
-                    let eta       = if fraction > 0.02 {
-                        (elapsed / fraction) * (1.0 - fraction) + 1.0 // +1 for pass 2
+                    let eta = if fraction > 0.02 {
+                        (elapsed / fraction) * (1.0 - fraction) + 1.0
                     } else { 0.0 };
                     if pct - last_pct1 >= 0.5 {
                         last_pct1 = pct;
@@ -439,7 +534,7 @@ pub async fn encode_video_with_progress(
         let s1 = child1.wait().map_err(|e| e.to_string())?;
         if !s1.success() { return Err("FFmpeg pass 1 failed".into()); }
 
-        // ── Pass 2 ─────────────────────────────────────────────────────────
+        // Pass 2
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 50.0, eta_secs: 0.0, pass: 2,
         });
@@ -474,8 +569,6 @@ pub async fn encode_video_with_progress(
             }
         } else {
             for &ai in &active_audio {
-                // The ? suffix makes ffmpeg skip the stream silently if it
-                // doesn't exist, instead of erroring out.
                 pass2.extend(["-map".into(), format!("0:a:{ai}?")]);
             }
         }
