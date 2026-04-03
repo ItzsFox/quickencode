@@ -47,7 +47,6 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const [currentTime, setCurrentTime] = useState(0);
   const [trimStart,   setTrimStart]   = useState(0);
   const [trimEnd,     setTrimEnd]     = useState(duration);
-  // Track whether video has loaded at least metadata so we can seek
   const [videoReady,  setVideoReady]  = useState(false);
 
   const trimStartRef = useRef(0);
@@ -57,7 +56,6 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
 
   const dragging = useRef<"start" | "end" | null>(null);
 
-  // Clean up "und" / empty language tags — show "Track N" instead
   const defaultTracks = (
     info.audio_tracks ?? [{ index: 0, label: "Track 1", language: "" }]
   ).map((t, i) => {
@@ -77,10 +75,11 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
   const emptyColor = isDark ? "#333336" : "#d0d0d0";
 
   // ── Video source ──────────────────────────────────────────────────────────
-  // convertFileSrc produces a tauri://localhost/... URL that the Tauri asset
-  // protocol can serve. We set it directly as the src attribute so the browser
-  // starts loading immediately. The crossOrigin attribute is required by the
-  // Tauri asset scope (CORS headers are set by the protocol handler).
+  // convertFileSrc converts a local filesystem path into a tauri://localhost URL
+  // that the Tauri asset protocol serves to the WebView.
+  // NOTE: do NOT set crossOrigin on the video element — it causes a CORS
+  // preflight that the asset protocol handler does not respond to, which
+  // permanently stalls the load on Windows.
   const videoSrc = convertFileSrc(filePath);
 
   // ── Video event listeners ─────────────────────────────────────────────────
@@ -88,7 +87,10 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     const v = videoRef.current;
     if (!v) return;
 
-    const onLoadedMetadata = () => setVideoReady(true);
+    // canplay fires once the browser has enough data to start playing.
+    // loadedmetadata alone is not enough on Windows — the file may still be
+    // buffering at that point and the spinner would show unnecessarily.
+    const onCanPlay = () => setVideoReady(true);
     const onTime = () => {
       setCurrentTime(v.currentTime);
       if (v.currentTime >= trimEndRef.current) {
@@ -99,24 +101,23 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     };
     const onPlay  = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => {
-      // If the src failed (can happen if the asset protocol scope isn't
-      // configured yet), log and do nothing — the user will see a black frame
-      // but everything else still works.
-      console.warn("[VideoEditor] video load error, src:", v.src);
+    const onError = (e: Event) => {
+      console.error("[VideoEditor] video error:", (e.target as HTMLVideoElement).error);
+      // Still mark ready so the spinner goes away and the user isn't stuck
+      setVideoReady(true);
     };
 
-    v.addEventListener("loadedmetadata", onLoadedMetadata);
-    v.addEventListener("timeupdate",     onTime);
-    v.addEventListener("play",           onPlay);
-    v.addEventListener("pause",          onPause);
-    v.addEventListener("error",          onError);
+    v.addEventListener("canplay",  onCanPlay);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("play",  onPlay);
+    v.addEventListener("pause", onPause);
+    v.addEventListener("error", onError);
     return () => {
-      v.removeEventListener("loadedmetadata", onLoadedMetadata);
-      v.removeEventListener("timeupdate",     onTime);
-      v.removeEventListener("play",           onPlay);
-      v.removeEventListener("pause",          onPause);
-      v.removeEventListener("error",          onError);
+      v.removeEventListener("canplay",  onCanPlay);
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("play",  onPlay);
+      v.removeEventListener("pause", onPause);
+      v.removeEventListener("error", onError);
     };
   }, []);
 
@@ -178,7 +179,6 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
       el.setPointerCapture(e.pointerId);
       e.preventDefault();
     } else {
-      // Bare track click → seek (clamped to trim region)
       const t     = pxToTime(e.clientX);
       const seekT = Math.max(trimStartRef.current, Math.min(trimEndRef.current, t));
       if (videoRef.current) videoRef.current.currentTime = seekT;
@@ -247,10 +247,10 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
 
       {/* ── VIDEO ──────────────────────────────────────────────────────── */}
       <div className="veditor-video-wrap">
+        {/* No crossOrigin attr — it causes a CORS stall with the Tauri asset protocol */}
         <video
           ref={videoRef}
           src={videoSrc}
-          crossOrigin="anonymous"
           preload="auto"
           playsInline
           tabIndex={-1}
@@ -265,7 +265,6 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
       {/* ── PLAYBACK CONTROLS + INLINE TIMELINE ────────────────────────── */}
       <div className="veditor-controls">
 
-        {/* Left: play button + current/total time */}
         <button
           className="veditor-play-btn"
           onClick={togglePlay}
@@ -287,7 +286,6 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           {fmtTime(currentTime)}&nbsp;/&nbsp;{fmtTime(duration)}
         </span>
 
-        {/* Centre: the trim timeline — stretches to fill remaining space */}
         <div className="veditor-controls-timeline">
           <div
             ref={timelineRef}
@@ -297,31 +295,19 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
             onPointerUp={onTimelinePointerUp}
             onPointerCancel={onTimelinePointerUp}
           >
-            {/* Base rail */}
             <div className="vtl-rail" />
-
-            {/* Dimmed regions outside trim window */}
             <div className="vtl-dim" style={{ left: 0, width: `${startPct}%` }} />
             <div className="vtl-dim" style={{ left: `${endPct}%`, right: 0, width: "auto" }} />
-
-            {/* Active (in-trim) region */}
             <div className="vtl-active" style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }} />
-
-            {/* Playhead */}
             <div className="vtl-playhead" style={{ left: `${playPct}%` }} />
-
-            {/* Trim start handle */}
             <div className="vtl-handle" style={{ left: `${startPct}%` }}>
               <div className="vtl-handle-grip" />
             </div>
-
-            {/* Trim end handle */}
             <div className="vtl-handle" style={{ left: `${endPct}%` }}>
               <div className="vtl-handle-grip" />
             </div>
           </div>
 
-          {/* Timestamp ticks below the track */}
           <div className="veditor-timeline-timestamps">
             <span>{fmtTime(0)}</span>
             <span>{fmtTime(duration / 4)}</span>
@@ -331,7 +317,6 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
           </div>
         </div>
 
-        {/* Right: clip length label */}
         <span className="veditor-clip-label">
           clip&nbsp;{fmtTime(clipLen)}
         </span>
