@@ -76,37 +76,51 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   };
   const [tracks, setTracks] = useState(buildTracks);
 
+  // ── Solo track: the one whose volume is being previewed ───────────────
+  // Because the browser mixes ALL audio streams from the file into one
+  // composite output, we cannot truly isolate per-track volumes in the
+  // preview. Instead we let the user "solo" one track at a time:
+  //   • Clicking a track row selects it as the solo track.
+  //   • video.volume reflects that track's volume slider in real time.
+  //   • All slider values are always saved independently and forwarded
+  //     to ffmpeg at export, where per-stream volume filters are applied.
+  // Default: first non-deleted track is soloed.
+  const firstActiveIdx = () => {
+    const idx = tracks.findIndex(t => !t.deleted);
+    return idx >= 0 ? idx : 0;
+  };
+  const [soloIdx, setSoloIdx] = useState<number>(firstActiveIdx);
+
   const isDark     = theme === "dark";
   const fillColor  = isDark ? "#888888" : "#555555";
   const emptyColor = isDark ? "#333336" : "#d0d0d0";
 
   const videoSrc = convertFileSrc(filePath);
 
-  // ── Apply volume via video.volume ──────────────────────────────────────
-  // The browser mixes all audio streams from the file into one output
-  // before JavaScript sees it. video.volume is the only reliable way
-  // to control that output in Tauri's WebView2/WKWebView without
-  // triggering the AudioContext autoplay suspension bug.
-  //
-  // We compute the average of active track volumes (0–200%) and map
-  // that to video.volume (0–1). Deleted tracks contribute 0.
-  // 100% average → volume 0.5; 200% average → volume 1.0 (max).
-  const applyVolume = useCallback((currentTracks: typeof tracks) => {
+  // ── Apply solo track volume to video.volume ───────────────────────────
+  const applyVolume = useCallback((currentTracks: typeof tracks, solo: number) => {
     const v = videoRef.current;
     if (!v) return;
-    const active = currentTracks.filter(t => !t.deleted);
-    if (active.length === 0) {
+    const t = currentTracks[solo];
+    if (!t || t.deleted) {
       v.volume = 0;
       return;
     }
-    const avg = active.reduce((sum, t) => sum + t.volume, 0) / active.length;
     // Map 0–200 → 0.0–1.0
-    v.volume = Math.min(1, Math.max(0, avg / 200));
+    v.volume = Math.min(1, Math.max(0, t.volume / 200));
   }, []);
 
   useEffect(() => {
-    applyVolume(tracks);
-  }, [tracks, applyVolume]);
+    applyVolume(tracks, soloIdx);
+  }, [tracks, soloIdx, applyVolume]);
+
+  // When the soloed track gets deleted, switch solo to the next active one
+  useEffect(() => {
+    if (tracks[soloIdx]?.deleted) {
+      const next = tracks.findIndex((t, i) => i !== soloIdx && !t.deleted);
+      if (next >= 0) setSoloIdx(next);
+    }
+  }, [tracks, soloIdx]);
 
   // ── Video event listeners ──────────────────────────────────────────────
   useEffect(() => {
@@ -252,6 +266,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   const startPct = duration > 0 ? (trimStart   / duration) * 100 : 0;
   const endPct   = duration > 0 ? (trimEnd     / duration) * 100 : 100;
   const clipLen  = trimEnd - trimStart;
+  const multiTrack = tracks.length > 1;
 
   return (
     <div className="veditor-overlay">
@@ -347,53 +362,83 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
       {/* ── AUDIO TRACKS ───────────────────────────────────────────────── */}
       {tracks.length > 0 && (
         <div className="veditor-audio">
-          <span className="veditor-section-label">Audio Tracks</span>
-          {tracks.map((t, i) => (
-            <div key={t.index} className={`veditor-track-row${t.deleted ? " veditor-track-deleted" : ""}`}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.5 }}>
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-                {!t.deleted && t.volume > 0 && <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>}
-                {!t.deleted && t.volume > 0 && <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>}
-              </svg>
-              <span className="veditor-track-label" title={t.label}>{t.label}</span>
-
-              {t.deleted ? (
-                <span className="veditor-track-restore" onClick={() => handleRestore(i)}>Restore</span>
-              ) : (
-                <div className="veditor-track-vol-wrap">
-                  <input
-                    type="range" min={0} max={200} step={1}
-                    value={t.volume}
-                    style={{ background: sliderBg(t.volume, 0, 200, fillColor, emptyColor), flex: 1 }}
-                    onChange={e => handleVolume(i, Number(e.target.value))}
-                    aria-label={`Volume for ${t.label}`}
-                  />
-                  <span className="veditor-track-vol-pct">{t.volume}%</span>
-                </div>
-              )}
-
-              <button
-                className="veditor-track-delete"
-                onClick={() => t.deleted ? handleRestore(i) : handleDelete(i)}
-                title={t.deleted ? "Restore track" : "Remove track"}
-                aria-label={t.deleted ? "Restore track" : "Remove track"}
+          <div className="veditor-audio-header">
+            <span className="veditor-section-label">Audio Tracks</span>
+            {multiTrack && (
+              <span className="veditor-solo-hint">
+                Click a track to preview its volume
+              </span>
+            )}
+          </div>
+          {tracks.map((t, i) => {
+            const isSolo = i === soloIdx && !t.deleted;
+            return (
+              <div
+                key={t.index}
+                className={[
+                  "veditor-track-row",
+                  t.deleted   ? "veditor-track-deleted" : "",
+                  isSolo && multiTrack ? "veditor-track-solo"  : "",
+                ].filter(Boolean).join(" ")}
+                onClick={() => { if (!t.deleted) setSoloIdx(i); }}
+                style={{ cursor: t.deleted ? "default" : "pointer" }}
               >
-                {t.deleted ? (
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <polyline points="1 4 1 10 7 10"/>
-                    <path d="M3.51 15a9 9 0 1 0 .49-5.95"/>
-                  </svg>
-                ) : (
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <polyline points="3 6 5 6 21 6"/>
-                    <path d="M19 6l-1 14H6L5 6"/>
-                    <path d="M10 11v6"/><path d="M14 11v6"/>
-                    <path d="M9 6V4h6v2"/>
-                  </svg>
+                {/* Solo indicator dot */}
+                {multiTrack && (
+                  <div className="veditor-solo-dot" aria-hidden="true">
+                    {isSolo && !t.deleted && (
+                      <svg width="6" height="6" viewBox="0 0 6 6">
+                        <circle cx="3" cy="3" r="3" fill="currentColor" />
+                      </svg>
+                    )}
+                  </div>
                 )}
-              </button>
-            </div>
-          ))}
+
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.5 }}>
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                  {!t.deleted && t.volume > 0 && <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>}
+                  {!t.deleted && t.volume > 0 && <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>}
+                </svg>
+                <span className="veditor-track-label" title={t.label}>{t.label}</span>
+
+                {t.deleted ? (
+                  <span className="veditor-track-restore" onClick={e => { e.stopPropagation(); handleRestore(i); }}>Restore</span>
+                ) : (
+                  <div className="veditor-track-vol-wrap" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="range" min={0} max={200} step={1}
+                      value={t.volume}
+                      style={{ background: sliderBg(t.volume, 0, 200, fillColor, emptyColor), flex: 1 }}
+                      onChange={e => { setSoloIdx(i); handleVolume(i, Number(e.target.value)); }}
+                      aria-label={`Volume for ${t.label}`}
+                    />
+                    <span className="veditor-track-vol-pct">{t.volume}%</span>
+                  </div>
+                )}
+
+                <button
+                  className="veditor-track-delete"
+                  onClick={e => { e.stopPropagation(); t.deleted ? handleRestore(i) : handleDelete(i); }}
+                  title={t.deleted ? "Restore track" : "Remove track"}
+                  aria-label={t.deleted ? "Restore track" : "Remove track"}
+                >
+                  {t.deleted ? (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <polyline points="1 4 1 10 7 10"/>
+                      <path d="M3.51 15a9 9 0 1 0 .49-5.95"/>
+                    </svg>
+                  ) : (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6l-1 14H6L5 6"/>
+                      <path d="M10 11v6"/><path d="M14 11v6"/>
+                      <path d="M9 6V4h6v2"/>
+                    </svg>
+                  )}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
