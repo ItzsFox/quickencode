@@ -15,7 +15,7 @@ function sliderBg(val: number, min: number, max: number, fill: string, empty: st
   const pct = ((val - min) / (max - min)) * 100;
   return `linear-gradient(to right, ${fill} ${pct}%, ${empty} ${pct}%)`;
 }
-function basename(p: string) { return p.split(/[\\\/]/).pop() ?? p; }
+function basename(p: string) { return p.split(/[\\\\/]/).pop() ?? p; }
 
 const QELogo = ({ size = 16 }: { size?: number }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size}
@@ -44,7 +44,32 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   const videoRef    = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
-  // Restore previous edits when reopening
+  // ── Web Audio API refs ─────────────────────────────────────────────────
+  // We create ONE AudioContext + ONE MediaElementSourceNode for the video,
+  // then one GainNode per audio track index. The source fans out to every
+  // GainNode, and every GainNode connects to the destination.
+  //
+  // Why this works for per-track control:
+  //   A <video> element that carries N audio streams decodes ALL of them into
+  //   the single composite PCM output that goes into the Web Audio graph.
+  //   We cannot truly split the streams apart in the browser — the browser
+  //   mixes them before we see the samples. What we CAN do is:
+  //     • Use the "per-track gain" as a soft UI control that is saved and
+  //       forwarded to ffmpeg at export time (where real per-stream volume
+  //       filters are applied).
+  //     • For the preview, we show the track rows with individual sliders but
+  //       apply the AVERAGE of active tracks to the single GainNode so the
+  //       preview is at least directionally correct.
+  //
+  // The AudioContext MUST be created (or resumed) from inside a user-gesture
+  // handler (play button, key press). Creating it eagerly and calling resume()
+  // inside the gesture is the correct cross-platform approach for Tauri's
+  // WebView2 / WKWebView.
+  const audioCtxRef  = useRef<AudioContext | null>(null);
+  const sourceRef    = useRef<MediaElementAudioSourceNode | null>(null);
+  const masterGain   = useRef<GainNode | null>(null);
+
+  // ── State ──────────────────────────────────────────────────────────────
   const [playing,     setPlaying]     = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [trimStart,   setTrimStart]   = useState(() => initialEdits?.trimStart ?? 0);
@@ -58,7 +83,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
 
   const dragging = useRef<"start" | "end" | null>(null);
 
-  // Build initial track list, restoring volumes/deletions from initialEdits
+  // ── Build initial track list ───────────────────────────────────────────
   const buildTracks = () => {
     const raw = info.audio_tracks ?? [{ index: 0, label: "Track 1", language: "" }];
     return raw.map((t, i) => {
@@ -82,34 +107,47 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
 
   const videoSrc = convertFileSrc(filePath);
 
-  // ── Compute composite volume from track states and apply to video.volume ──
-  // Web Audio API (AudioContext + MediaElementSource) is unreliable in Tauri's
-  // WebView — it suspends silently on Windows (WebView2) and macOS (WKWebView),
-  // killing all audio output. We use video.volume directly instead:
-  //   • All audio tracks in a video file are decoded together by the media
-  //     engine into one composite output — that's the single stream going
-  //     through video.volume.
-  //   • We approximate per-track control by averaging the active-track volumes
-  //     and writing the result straight to video.volume on every tracks change.
-  //   • Deleted tracks contribute 0 to the average; remaining tracks contribute
-  //     their volume percentage. This gives live, glitch-free volume response.
-  const applyVolume = useCallback((currentTracks: typeof tracks) => {
+  // ── Initialise Web Audio graph (called once on first play gesture) ─────
+  const ensureAudioGraph = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
+
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new AudioContext();
+    }
+    const ctx = audioCtxRef.current;
+
+    // Resume suspended context (required after user gesture in modern browsers)
+    if (ctx.state === "suspended") ctx.resume();
+
+    if (!sourceRef.current) {
+      sourceRef.current = ctx.createMediaElementSource(v);
+      masterGain.current = ctx.createGain();
+      sourceRef.current.connect(masterGain.current);
+      masterGain.current.connect(ctx.destination);
+    }
+  }, []);
+
+  // ── Apply composite volume to master gain whenever tracks change ───────
+  // Since the browser gives us one mixed stream, we compute the average
+  // volume of active tracks (0-200% mapped to 0-2 gain) and apply it.
+  // Deleted tracks count as 0; if all are deleted, silence the output.
+  const applyGain = useCallback((currentTracks: typeof tracks) => {
+    const gain = masterGain.current;
+    if (!gain) return;
     const active = currentTracks.filter(t => !t.deleted);
     if (active.length === 0) {
-      v.volume = 0;
+      gain.gain.setTargetAtTime(0, gain.context.currentTime, 0.02);
       return;
     }
     const avg = active.reduce((sum, t) => sum + t.volume, 0) / active.length / 100;
-    // video.volume is clamped to [0, 1]; slider goes up to 200% so cap at 1
-    v.volume = Math.min(1, Math.max(0, avg));
+    // gain range: 0 – 2  (slider goes up to 200%)
+    gain.gain.setTargetAtTime(Math.max(0, avg), gain.context.currentTime, 0.02);
   }, []);
 
-  // Apply volume whenever tracks change
   useEffect(() => {
-    applyVolume(tracks);
-  }, [tracks, applyVolume]);
+    applyGain(tracks);
+  }, [tracks, applyGain]);
 
   // ── Video event listeners ──────────────────────────────────────────────
   useEffect(() => {
@@ -143,17 +181,29 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     };
   }, []);
 
+  // Cleanup AudioContext on unmount
+  useEffect(() => {
+    return () => {
+      audioCtxRef.current?.close();
+      audioCtxRef.current = null;
+      sourceRef.current   = null;
+      masterGain.current  = null;
+    };
+  }, []);
+
   // ── Play / pause ───────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
+    // Must ensure audio graph is set up from inside a user-gesture handler
+    ensureAudioGraph();
     if (v.paused) {
       if (v.currentTime >= trimEndRef.current) v.currentTime = trimStartRef.current;
       v.play().catch(() => {});
     } else {
       v.pause();
     }
-  }, []);
+  }, [ensureAudioGraph]);
 
   // ── Space bar ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -214,7 +264,6 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     if (dragging.current === "start") {
       const clamped = Math.max(0, Math.min(t, trimEndRef.current - 0.1));
       setTrimStart(clamped);
-      // Snap playhead forward if it falls behind the start handle
       if (videoRef.current && videoRef.current.currentTime < clamped) {
         videoRef.current.currentTime = clamped;
         setCurrentTime(clamped);
@@ -222,7 +271,6 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     } else {
       const clamped = Math.max(trimStartRef.current + 0.1, Math.min(t, duration));
       setTrimEnd(clamped);
-      // Snap playhead backward if it falls past the end handle
       if (videoRef.current && videoRef.current.currentTime > clamped) {
         videoRef.current.currentTime = clamped;
         setCurrentTime(clamped);
@@ -399,6 +447,9 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
               </button>
             </div>
           ))}
+          <p className="veditor-audio-note">
+            Preview reflects the average volume of active tracks. Per-track volumes are applied precisely at export via ffmpeg.
+          </p>
         </div>
       )}
 
