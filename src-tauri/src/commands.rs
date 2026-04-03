@@ -106,7 +106,7 @@ pub fn open_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-// ── Structs ─────────────────────────────────────────────────────────────────
+// ── Structs ───────────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
 pub struct AudioTrackInfo {
@@ -132,20 +132,20 @@ pub struct EncodeProgress {
     pub pass:     u8,
 }
 
-// ── get_video_info ───────────────────────────────────────────────────────────
+// ── get_video_info ───────────────────────────────────────────────────────────────
 
 /// Returns the best human-readable label for an audio stream.
 ///
 /// Priority order (first non-empty, non-"und" value wins):
 ///   1. tags.title          – set by most encoders for named tracks (e.g. OBS)
-///   2. tags.handler_name   – Windows / MP4 handler name (e.g. "System sounds",
-///                            "Microphone") — often richer than title on Windows captures
+///   2. tags.handler_name   – Windows / MP4 handler name
+///                            (e.g. "System sounds", "Microphone")
+///                            Generic/codec-only values are skipped.
 ///   3. tags.language       – ISO 639 language code (e.g. "eng", "jpn")
 ///   4. "Track N"           – final fallback
 fn audio_label(stream: &serde_json::Value, one_based_index: usize) -> String {
     let tags = &stream["tags"];
 
-    // Helper: return Some(s) when s is non-empty and not the sentinel "und"
     let valid = |s: &str| -> Option<String> {
         let t = s.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("und") || t.eq_ignore_ascii_case("\0") {
@@ -159,26 +159,34 @@ fn audio_label(stream: &serde_json::Value, one_based_index: usize) -> String {
     if let Some(v) = tags["title"].as_str().and_then(|s| valid(s)) {
         return v;
     }
-    // 2. handler_name  (Windows MP4 / MKV game captures)
+
+    // 2. handler_name  (Windows MP4 / MKV captures)
+    //    Skip values that are just codec/container identifiers and carry no
+    //    meaningful track name. The list covers both spaced and camelCase
+    //    variants that ffprobe surfaces in the wild.
     if let Some(v) = tags["handler_name"].as_str().and_then(|s| valid(s)) {
-        // Some encoders put the codec name here (e.g. "SoundHandler", "ISO Media file").
-        // Skip obviously-generic handler names.
         let lower = v.to_lowercase();
-        let generic = lower.contains("sound handler") ||
-                      lower.contains("iso media")      ||
-                      lower.contains("mp4a")            ||
-                      lower.contains("mpeg")            ||
-                      lower.contains("aac")             ||
-                      lower.contains("vorbis")          ||
-                      lower.contains("opus");
+        // Remove all whitespace for the camelCase check
+        let compact: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
+        let generic =
+            compact.contains("soundhandler") ||
+            lower.contains("sound handler")  ||
+            lower.contains("iso media")       ||
+            lower.contains("mp4a")            ||
+            lower.contains("mpeg")            ||
+            lower.contains("aac")             ||
+            lower.contains("vorbis")          ||
+            lower.contains("opus");
         if !generic {
             return v;
         }
     }
+
     // 3. language
     if let Some(v) = tags["language"].as_str().and_then(|s| valid(s)) {
         return v;
     }
+
     // 4. fallback
     format!("Track {}", one_based_index)
 }
@@ -241,43 +249,25 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
     Ok(VideoInfo { duration_secs, size_mb, bitrate_kbps, width, height, audio_tracks })
 }
 
-// ── extract_audio_track ───────────────────────────────────────────────────────
-//
-// Extracts a single audio track from the source file into a temporary MP4 that
-// contains only that one audio stream (+ the video stream so the browser <video>
-// element can play it with a proper timeline).
-//
-// Called by the VideoEditor whenever the user switches the previewed track.
-// Returns the absolute path of the temp file so the frontend can use
-// convertFileSrc() on it.
+// ── extract_audio_track ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn extract_audio_track(
     app: tauri::AppHandle,
     input: String,
-    audio_stream_index: usize,  // 0-based index among audio streams
+    audio_stream_index: usize,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg = resolve_bin(&app, "ffmpeg")?;
 
-        // Use a fixed temp path per track index so we don't accumulate files
         let out_path = std::env::temp_dir()
             .join(format!("qe_preview_track_{}.mp4", audio_stream_index));
         let out_str  = out_path.to_str().unwrap().to_string();
 
-        // If an up-to-date file already exists from a previous call for this
-        // track, return it immediately to avoid re-muxing on every click.
-        // We check existence only — input file changes will be caught because
-        // quickencode always re-opens a fresh session per file.
         if out_path.exists() {
             return Ok(out_str);
         }
 
-        // Stream-copy both video and the requested audio stream.
-        // -map 0:v:0          — video stream 0
-        // -map 0:a:<N>        — the N-th audio stream (0-based among audio)
-        // -c copy             — no re-encode (fast)
-        // -movflags +faststart — seekable in the browser
         let status = Command::new(&ffmpeg)
             .args([
                 "-y",
@@ -306,10 +296,7 @@ pub async fn extract_audio_track(
     .map_err(|e| e.to_string())?
 }
 
-// ── clear_preview_track_cache ────────────────────────────────────────────────
-//
-// Deletes all qe_preview_track_*.mp4 temp files so the next video loaded gets
-// fresh extractions rather than stale ones from the previous session.
+// ── clear_preview_track_cache ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn clear_preview_track_cache() {
@@ -325,7 +312,7 @@ pub fn clear_preview_track_cache() {
     }
 }
 
-// ── get_video_frames ─────────────────────────────────────────────────────────
+// ── get_video_frames ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_video_frames(
@@ -365,7 +352,7 @@ pub async fn get_video_frames(
     .await.map_err(|e| e.to_string())?
 }
 
-// ── get_encoded_frame ─────────────────────────────────────────────────────────
+// ── get_encoded_frame ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_encoded_frame(
@@ -419,7 +406,7 @@ pub async fn get_encoded_frame(
     .await.map_err(|e| e.to_string())?
 }
 
-// ── encode_video_with_progress ───────────────────────────────────────────────
+// ── encode_video_with_progress ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn encode_video_with_progress(
