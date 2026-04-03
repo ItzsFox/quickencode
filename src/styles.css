@@ -32,6 +32,9 @@
   --radius-pill:  999px;
   --radius-card:  12px;
   --radius-sm:    7px;
+  --solo-bg:      rgba(0,0,0,0.04);
+  --solo-border:  rgba(0,0,0,0.18);
+  --solo-dot:     #1a1a1a;
 }
 
 /* ══════════════════════════════════════════
@@ -64,6 +67,9 @@
   --radius-pill:  999px;
   --radius-card:  12px;
   --radius-sm:    7px;
+  --solo-bg:      rgba(255,255,255,0.06);
+  --solo-border:  rgba(255,255,255,0.22);
+  --solo-dot:     #ccccca;
 }
 
 html, body {
@@ -1217,6 +1223,20 @@ select:focus { border-color: var(--text-dim); }
 }
 .veditor-audio::-webkit-scrollbar { width: 3px; }
 .veditor-audio::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
+
+/* ── Audio header row (label + hint) ──────────────────────────── */
+.veditor-audio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+.veditor-solo-hint {
+  font-size: 9px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
 .veditor-section-label {
   display: block;
   font-size: 9px;
@@ -1224,7 +1244,7 @@ select:focus { border-color: var(--text-dim); }
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-dim);
-  margin-bottom: 5px;
+  /* margin-bottom handled by .veditor-audio-header when header exists */
 }
 
 /* Track row */
@@ -1237,8 +1257,26 @@ select:focus { border-color: var(--text-dim); }
   background: var(--surface);
   border: 1px solid var(--border);
   margin-bottom: 4px;
+  transition: background 0.12s, border-color 0.12s;
 }
 .veditor-track-row:last-child { margin-bottom: 0; }
+
+/* ── Solo / active track highlight ───────────────────────────── */
+.veditor-track-solo {
+  background: var(--solo-bg);
+  border-color: var(--solo-border) !important;
+}
+
+/* ── Solo dot indicator ───────────────────────────────────────── */
+.veditor-solo-dot {
+  width: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--solo-dot);
+}
+
 .veditor-track-deleted {
   opacity: 0.42;
 }
