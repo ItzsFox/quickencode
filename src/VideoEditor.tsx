@@ -1,391 +1,443 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { VideoInfo, VideoEdits } from "./types";
+import type { VideoEdits } from "./App";
 
-// ── helpers ────────────────────────────────────────────────────────────────
-function fmtTime(s: number) {
-  const h   = Math.floor(s / 3600);
-  const m   = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  return h > 0
-    ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
-    : `${m}:${String(sec).padStart(2, "0")}`;
+interface AudioTrackInfo {
+  index:    number;
+  label:    string;
+  language: string;
 }
-function sliderBg(val: number, min: number, max: number, fill: string, empty: string) {
-  const pct = ((val - min) / (max - min)) * 100;
-  return `linear-gradient(to right, ${fill} ${pct}%, ${empty} ${pct}%)`;
+interface VideoInfo {
+  duration_secs: number;
+  width:         number;
+  height:        number;
+  audio_tracks?: AudioTrackInfo[];
 }
-function basename(p: string) { return p.split(/[\\\/]/).pop() ?? p; }
 
-const QELogo = ({ size = 16 }: { size?: number }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size}
-    viewBox="0 0 85 85" fill="currentColor"
-    aria-label="quick encode logo"
-    style={{ flexShrink: 0, display: "block" }}>
-    <path d="M80 30C82.7614 30 85 32.2386 85 35V80C85 82.7614 82.7614 85 80 85H35C32.2386 85 30 82.7614 30 80V69H65C67.2091 69 69 67.2091 69 65V30H80ZM65 16C67.2091 16 69 17.7909 69 20V30H55V50C55 52.7614 52.7614 55 50 55H30V69H20C17.7909 69 16 67.2091 16 65V55H30V35C30 32.2386 32.2386 30 35 30H55V16H65ZM50 0C52.7614 0 55 2.23858 55 5V16H20C17.7909 16 16 17.7909 16 20V55H5C2.23858 55 0 52.7614 0 50V5C0 2.23858 2.23858 0 5 0H50Z" />
-  </svg>
-);
+interface TrackState {
+  index:   number;
+  label:   string;
+  volume:  number;   // 0–200
+  deleted: boolean;
+}
 
-// ── types ──────────────────────────────────────────────────────────────────
 interface Props {
-  filePath:  string;
-  info:      VideoInfo;
-  theme:     "light" | "dark";
-  onConfirm: (edits: VideoEdits) => void;
-  onCancel:  () => void;
+  filePath:     string;
+  info:         VideoInfo;
+  theme:        "light" | "dark";
+  initialEdits?: VideoEdits;
+  onConfirm:    (edits: VideoEdits) => void;
+  onCancel:     () => void;
 }
 
-const HANDLE_HIT_PX = 20;
+function fmtTime(s: number) {
+  const m   = Math.floor(s / 60);
+  const sec = (s % 60).toFixed(1).padStart(4, "0");
+  return `${m}:${sec}`;
+}
 
-// ── component ──────────────────────────────────────────────────────────────
-export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel }: Props) {
-  const duration    = info.duration_secs;
+export default function VideoEditor({ filePath, info, theme: _theme, initialEdits, onConfirm, onCancel }: Props) {
+  const duration = info.duration_secs;
+
+  // ── initialise from saved edits or defaults ──────────────────────────────
+  const initTrimStart = initialEdits?.trimStart ?? 0;
+  const initTrimEnd   = initialEdits?.trimEnd   ?? duration;
+
+  const defaultTracks = (): TrackState[] => {
+    const tracks = info.audio_tracks ?? [{ index: 0, label: "Audio 1", language: "" }];
+    return tracks.map(t => {
+      const saved = initialEdits?.audioTracks.find(a => a.index === t.index);
+      return {
+        index:   t.index,
+        label:   t.label || `Audio ${t.index + 1}`,
+        volume:  saved?.volume  ?? 100,
+        deleted: saved?.deleted ?? false,
+      };
+    });
+  };
+
+  const [trimStart, setTrimStart] = useState(initTrimStart);
+  const [trimEnd,   setTrimEnd]   = useState(initTrimEnd);
+  const [current,   setCurrent]   = useState(initTrimStart);
+  const [playing,   setPlaying]   = useState(false);
+  const [tracks,    setTracks]    = useState<TrackState[]>(defaultTracks);
+
   const videoRef    = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
-  const [playing,     setPlaying]     = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [trimStart,   setTrimStart]   = useState(0);
-  const [trimEnd,     setTrimEnd]     = useState(duration);
-  const [videoReady,  setVideoReady]  = useState(false);
+  // ── Web Audio API for per-track volume control ───────────────────────────
+  const audioCtxRef   = useRef<AudioContext | null>(null);
+  // gainNodes[trackIndex] = GainNode
+  const gainNodesRef  = useRef<Map<number, GainNode>>(new Map());
+  const sourceRef     = useRef<MediaElementAudioSourceNode | null>(null);
+  const audioReadyRef = useRef(false);
 
-  const trimStartRef = useRef(0);
-  const trimEndRef   = useRef(duration);
-  useEffect(() => { trimStartRef.current = trimStart; }, [trimStart]);
-  useEffect(() => { trimEndRef.current   = trimEnd;   }, [trimEnd]);
+  const buildAudioGraph = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || audioReadyRef.current) return;
+    try {
+      const ctx = new AudioContext();
+      audioCtxRef.current = ctx;
+      const src = ctx.createMediaElementSource(video);
+      sourceRef.current = src;
 
-  const dragging = useRef<"start" | "end" | null>(null);
-
-  const defaultTracks = (
-    info.audio_tracks ?? [{ index: 0, label: "Track 1", language: "" }]
-  ).map((t, i) => {
-    const rawLabel = t.label || "";
-    const isUnd = rawLabel.toLowerCase() === "und" || rawLabel.trim() === "";
-    return {
-      index:   t.index,
-      label:   isUnd ? `Track ${i + 1}` : rawLabel,
-      volume:  100,
-      deleted: false,
-    };
-  });
-  const [tracks, setTracks] = useState(defaultTracks);
-
-  const isDark     = theme === "dark";
-  const fillColor  = isDark ? "#888888" : "#555555";
-  const emptyColor = isDark ? "#333336" : "#d0d0d0";
-
-  // ── Video source ──────────────────────────────────────────────────────────
-  // convertFileSrc converts a local filesystem path into a tauri://localhost URL
-  // that the Tauri asset protocol serves to the WebView.
-  // NOTE: do NOT set crossOrigin on the video element — it causes a CORS
-  // preflight that the asset protocol handler does not respond to, which
-  // permanently stalls the load on Windows.
-  const videoSrc = convertFileSrc(filePath);
-
-  // ── Video event listeners ─────────────────────────────────────────────────
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-
-    // canplay fires once the browser has enough data to start playing.
-    // loadedmetadata alone is not enough on Windows — the file may still be
-    // buffering at that point and the spinner would show unnecessarily.
-    const onCanPlay = () => setVideoReady(true);
-    const onTime = () => {
-      setCurrentTime(v.currentTime);
-      if (v.currentTime >= trimEndRef.current) {
-        v.pause();
-        v.currentTime = trimEndRef.current;
-        setPlaying(false);
-      }
-    };
-    const onPlay  = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
-    const onError = (e: Event) => {
-      console.error("[VideoEditor] video error:", (e.target as HTMLVideoElement).error);
-      // Still mark ready so the spinner goes away and the user isn't stuck
-      setVideoReady(true);
-    };
-
-    v.addEventListener("canplay",  onCanPlay);
-    v.addEventListener("timeupdate", onTime);
-    v.addEventListener("play",  onPlay);
-    v.addEventListener("pause", onPause);
-    v.addEventListener("error", onError);
-    return () => {
-      v.removeEventListener("canplay",  onCanPlay);
-      v.removeEventListener("timeupdate", onTime);
-      v.removeEventListener("play",  onPlay);
-      v.removeEventListener("pause", onPause);
-      v.removeEventListener("error", onError);
-    };
-  }, []);
-
-  // ── Play / pause ───────────────────────────────────────────────────────
-  const togglePlay = useCallback(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) {
-      if (v.currentTime >= trimEndRef.current) v.currentTime = trimStartRef.current;
-      v.play().catch(() => {});
-    } else {
-      v.pause();
+      // For a single MediaElement source we can only have one gain chain
+      // that controls the overall mix. True per-track routing requires
+      // separate source nodes per ffmpeg-demuxed stream, which isn't
+      // possible in the browser for a single <video>. Instead we keep
+      // one GainNode per track and the combined gain = product of active
+      // track gains. We update the master gain whenever any volume changes.
+      const masterGain = ctx.createGain();
+      gainNodesRef.current.set(-1, masterGain); // -1 = master
+      src.connect(masterGain);
+      masterGain.connect(ctx.destination);
+      audioReadyRef.current = true;
+    } catch {
+      // AudioContext unavailable – fall back to video.volume
+      audioReadyRef.current = false;
     }
   }, []);
 
-  // ── Space bar ──────────────────────────────────────────────────────────
+  // Recalculate master gain whenever track volumes/deleted state changes.
+  // We compute the average of all non-deleted volumes (0-200) normalised to 0-2.
+  const applyVolumes = useCallback((currentTracks: TrackState[]) => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const active = currentTracks.filter(t => !t.deleted);
+    if (active.length === 0) {
+      video.volume = 0;
+      return;
+    }
+
+    // Average volume percentage of active tracks, normalised 0-2
+    const avg = active.reduce((sum, t) => sum + t.volume, 0) / active.length / 100;
+    const clamped = Math.min(2, Math.max(0, avg));
+
+    const master = gainNodesRef.current.get(-1);
+    if (master) {
+      master.gain.setTargetAtTime(clamped, audioCtxRef.current!.currentTime, 0.01);
+    } else {
+      // Fallback: browser video volume only goes 0-1
+      video.volume = Math.min(1, clamped);
+    }
+  }, []);
+
+  useEffect(() => {
+    applyVolumes(tracks);
+  }, [tracks, applyVolumes]);
+
+  // ── space-bar play/pause ─────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.code === "Space") {
         e.preventDefault();
-        togglePlay();
+        setPlaying(p => !p);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePlay]);
+  }, []);
 
-  // ── Timeline pointer helpers ───────────────────────────────────────────
+  // ── sync playing state ───────────────────────────────────────────────────
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (playing) {
+      // Resume AudioContext if suspended (browser autoplay policy)
+      audioCtxRef.current?.resume();
+      video.play().catch(() => setPlaying(false));
+    } else {
+      video.pause();
+    }
+  }, [playing]);
+
+  // ── timeupdate: track current, enforce trim end ──────────────────────────
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onTime = () => {
+      setCurrent(video.currentTime);
+      if (video.currentTime >= trimEnd) {
+        video.pause();
+        video.currentTime = trimEnd;
+        setPlaying(false);
+        setCurrent(trimEnd);
+      }
+    };
+    video.addEventListener("timeupdate", onTime);
+    return () => video.removeEventListener("timeupdate", onTime);
+  }, [trimEnd]);
+
+  // ── seek video when current changes externally (trim handle drag) ────────
+  const seekVideo = useCallback((t: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = t;
+  }, []);
+
+  // ── timeline drag helpers ────────────────────────────────────────────────
+  type DragTarget = "start" | "end" | "seek";
+
   const pxToTime = useCallback((clientX: number): number => {
     const el = timelineRef.current;
-    if (!el || duration <= 0) return 0;
-    const rect  = el.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    if (!el) return 0;
+    const { left, width } = el.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - left) / width));
     return ratio * duration;
   }, [duration]);
 
-  const onTimelinePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    const el = timelineRef.current;
-    if (!el || duration <= 0) return;
+  const startDrag = useCallback((target: DragTarget, e: React.PointerEvent) => {
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
 
-    const rect    = el.getBoundingClientRect();
-    const clickPx = e.clientX - rect.left;
-    const trackW  = rect.width;
-    const startPx = (trimStartRef.current / duration) * trackW;
-    const endPx   = (trimEndRef.current   / duration) * trackW;
-
-    const nearStart = Math.abs(clickPx - startPx) <= HANDLE_HIT_PX;
-    const nearEnd   = Math.abs(clickPx - endPx)   <= HANDLE_HIT_PX;
-
-    if (nearStart || nearEnd) {
-      let which: "start" | "end";
-      if (nearStart && nearEnd) {
-        which = clickPx <= (startPx + endPx) / 2 ? "start" : "end";
+    const onMove = (ev: PointerEvent) => {
+      const t = pxToTime(ev.clientX);
+      if (target === "start") {
+        const newStart = Math.max(0, Math.min(t, trimEnd - 0.1));
+        setTrimStart(newStart);
+        // If playhead is before new start, snap it forward
+        setCurrent(prev => {
+          const next = Math.max(prev, newStart);
+          seekVideo(next);
+          return next;
+        });
+      } else if (target === "end") {
+        const newEnd = Math.min(duration, Math.max(t, trimStart + 0.1));
+        setTrimEnd(newEnd);
+        // If playhead is past new end, snap it back
+        setCurrent(prev => {
+          const next = Math.min(prev, newEnd);
+          seekVideo(next);
+          return next;
+        });
       } else {
-        which = nearStart ? "start" : "end";
+        // seek click — only within trim region
+        const clamped = Math.max(trimStart, Math.min(trimEnd, t));
+        setCurrent(clamped);
+        seekVideo(clamped);
       }
-      dragging.current = which;
-      el.setPointerCapture(e.pointerId);
-      e.preventDefault();
-    } else {
-      const t     = pxToTime(e.clientX);
-      const seekT = Math.max(trimStartRef.current, Math.min(trimEndRef.current, t));
-      if (videoRef.current) videoRef.current.currentTime = seekT;
-      setCurrentTime(seekT);
-    }
-  }, [duration, pxToTime]);
+    };
 
-  const onTimelinePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragging.current) return;
+    const onUp = () => {
+      el.removeEventListener("pointermove", onMove as EventListener);
+      el.removeEventListener("pointerup",   onUp);
+    };
+    el.addEventListener("pointermove", onMove as EventListener);
+    el.addEventListener("pointerup",   onUp);
+  }, [pxToTime, trimEnd, trimStart, duration, seekVideo]);
+
+  // ── timeline click to seek ───────────────────────────────────────────────
+  const onTimelineClick = useCallback((e: React.MouseEvent) => {
     const t = pxToTime(e.clientX);
-    if (dragging.current === "start") {
-      const clamped = Math.max(0, Math.min(t, trimEndRef.current - 0.1));
-      setTrimStart(clamped);
-      if (videoRef.current && videoRef.current.currentTime < clamped) {
-        videoRef.current.currentTime = clamped;
-        setCurrentTime(clamped);
-      }
-    } else {
-      const clamped = Math.max(trimStartRef.current + 0.1, Math.min(t, duration));
-      setTrimEnd(clamped);
-    }
-  }, [duration, pxToTime]);
+    const clamped = Math.max(trimStart, Math.min(trimEnd, t));
+    setCurrent(clamped);
+    seekVideo(clamped);
+  }, [pxToTime, trimStart, trimEnd, seekVideo]);
 
-  const onTimelinePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (dragging.current) {
-      timelineRef.current?.releasePointerCapture(e.pointerId);
-      dragging.current = null;
-    }
-  }, []);
+  // ── confirm ──────────────────────────────────────────────────────────────
+  const handleConfirm = () => {
+    onConfirm({
+      trimStart,
+      trimEnd,
+      audioTracks: tracks.map(t => ({ index: t.index, volume: t.volume, deleted: t.deleted })),
+    });
+  };
 
-  // ── Audio helpers ──────────────────────────────────────────────────────
-  const handleVolume  = (i: number, v: number) =>
-    setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, volume: v } : t));
-  const handleDelete  = (i: number) =>
-    setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, deleted: true } : t));
-  const handleRestore = (i: number) =>
-    setTracks(prev => prev.map((t, idx) => idx === i ? { ...t, deleted: false } : t));
+  // ── volume change ─────────────────────────────────────────────────────────
+  const setVolume = (index: number, vol: number) => {
+    setTracks(prev => prev.map(t => t.index === index ? { ...t, volume: vol } : t));
+  };
+  const deleteTrack = (index: number) => {
+    setTracks(prev => prev.map(t => t.index === index ? { ...t, deleted: true } : t));
+  };
+  const restoreTrack = (index: number) => {
+    setTracks(prev => prev.map(t => t.index === index ? { ...t, deleted: false } : t));
+  };
 
-  // ── Confirm ────────────────────────────────────────────────────────────
-  const confirm = () => onConfirm({
-    trimStart,
-    trimEnd,
-    audioTracks: tracks.map(t => ({ index: t.index, volume: t.volume, deleted: t.deleted })),
-  });
+  // ── percentage helpers for CSS ───────────────────────────────────────────
+  const pct = (t: number) => `${(t / duration) * 100}%`;
 
-  // ── Derived percentages ────────────────────────────────────────────────
-  const playPct  = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const startPct = duration > 0 ? (trimStart   / duration) * 100 : 0;
-  const endPct   = duration > 0 ? (trimEnd     / duration) * 100 : 100;
-  const clipLen  = trimEnd - trimStart;
+  const src = convertFileSrc(filePath);
 
   return (
     <div className="veditor-overlay">
-
-      {/* ── HEADER ─────────────────────────────────────────────────────── */}
+      {/* Header */}
       <div className="veditor-header">
         <div className="veditor-header-left">
-          <QELogo size={16} />
           <span className="veditor-title">Video Editor</span>
-          <span className="veditor-filename">{basename(filePath)}</span>
+          <span className="veditor-filename">{filePath.split(/[\\\/]/).pop()}</span>
         </div>
-        <div className="veditor-header-right">
-          <button className="veditor-close" onClick={onCancel} aria-label="Close editor">&times;</button>
-        </div>
+        <button className="veditor-close" onClick={onCancel} aria-label="Close editor">&times;</button>
       </div>
 
-      {/* ── VIDEO ──────────────────────────────────────────────────────── */}
+      {/* Video */}
       <div className="veditor-video-wrap">
-        {/* No crossOrigin attr — it causes a CORS stall with the Tauri asset protocol */}
         <video
           ref={videoRef}
-          src={videoSrc}
-          preload="auto"
+          src={src}
+          onLoadedMetadata={() => {
+            const video = videoRef.current;
+            if (!video) return;
+            video.currentTime = trimStart;
+            buildAudioGraph();
+          }}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
           playsInline
-          tabIndex={-1}
+          preload="auto"
         />
-        {!videoReady && (
-          <div className="veditor-video-loading">
-            <div className="spin" />
-          </div>
-        )}
       </div>
 
-      {/* ── PLAYBACK CONTROLS + INLINE TIMELINE ────────────────────────── */}
+      {/* Playback controls + timeline */}
       <div className="veditor-controls">
-
         <button
           className="veditor-play-btn"
-          onClick={togglePlay}
+          onClick={() => setPlaying(p => !p)}
           aria-label={playing ? "Pause" : "Play"}
         >
           {playing ? (
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6"  y="4" width="4" height="16" rx="1"/>
-              <rect x="14" y="4" width="4" height="16" rx="1"/>
+            <svg width="11" height="13" viewBox="0 0 11 13" fill="currentColor">
+              <rect x="0" y="0" width="4" height="13" rx="1"/>
+              <rect x="7" y="0" width="4" height="13" rx="1"/>
             </svg>
           ) : (
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+            <svg width="11" height="13" viewBox="0 0 24 24" fill="currentColor">
               <polygon points="5,3 19,12 5,21"/>
             </svg>
           )}
         </button>
 
-        <span className="veditor-time">
-          {fmtTime(currentTime)}&nbsp;/&nbsp;{fmtTime(duration)}
-        </span>
+        <span className="veditor-time">{fmtTime(current)}</span>
 
-        <div className="veditor-controls-timeline">
+        {/* Timeline track */}
+        <div
+          className="veditor-timeline-track"
+          ref={timelineRef}
+          onClick={onTimelineClick}
+        >
+          {/* background bar */}
+          <div className="vtl-bg" />
+
+          {/* dimmed region before trim start */}
+          <div className="vtl-dim" style={{ left: 0, width: pct(trimStart) }} />
+          {/* dimmed region after trim end */}
+          <div className="vtl-dim" style={{ left: pct(trimEnd), right: 0, width: undefined }} />
+
+          {/* active region */}
+          <div className="vtl-active" style={{ left: pct(trimStart), width: pct(trimEnd - trimStart) }} />
+
+          {/* playhead */}
+          <div className="vtl-playhead" style={{ left: pct(current) }} />
+
+          {/* trim start handle */}
           <div
-            ref={timelineRef}
-            className="veditor-timeline-track"
-            onPointerDown={onTimelinePointerDown}
-            onPointerMove={onTimelinePointerMove}
-            onPointerUp={onTimelinePointerUp}
-            onPointerCancel={onTimelinePointerUp}
+            className="vtl-handle"
+            style={{ left: pct(trimStart) }}
+            onPointerDown={e => startDrag("start", e)}
           >
-            <div className="vtl-rail" />
-            <div className="vtl-dim" style={{ left: 0, width: `${startPct}%` }} />
-            <div className="vtl-dim" style={{ left: `${endPct}%`, right: 0, width: "auto" }} />
-            <div className="vtl-active" style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }} />
-            <div className="vtl-playhead" style={{ left: `${playPct}%` }} />
-            <div className="vtl-handle" style={{ left: `${startPct}%` }}>
-              <div className="vtl-handle-grip" />
-            </div>
-            <div className="vtl-handle" style={{ left: `${endPct}%` }}>
-              <div className="vtl-handle-grip" />
-            </div>
+            <div className="vtl-handle-bar" />
+            <span className="vtl-handle-time">{fmtTime(trimStart)}</span>
           </div>
 
-          <div className="veditor-timeline-timestamps">
-            <span>{fmtTime(0)}</span>
-            <span>{fmtTime(duration / 4)}</span>
-            <span>{fmtTime(duration / 2)}</span>
-            <span>{fmtTime(duration * 3 / 4)}</span>
-            <span>{fmtTime(duration)}</span>
+          {/* trim end handle */}
+          <div
+            className="vtl-handle"
+            style={{ left: pct(trimEnd) }}
+            onPointerDown={e => startDrag("end", e)}
+          >
+            <div className="vtl-handle-bar" />
+            <span className="vtl-handle-time">{fmtTime(trimEnd)}</span>
           </div>
         </div>
 
-        <span className="veditor-clip-label">
-          clip&nbsp;{fmtTime(clipLen)}
-        </span>
+        <span className="veditor-time">{fmtTime(duration)}</span>
       </div>
 
-      {/* ── AUDIO TRACKS ───────────────────────────────────────────────── */}
-      {tracks.length > 0 && (
-        <div className="veditor-audio">
-          <span className="veditor-section-label">Audio Tracks</span>
-          {tracks.map((t, i) => (
-            <div key={t.index} className={`veditor-track-row${t.deleted ? " veditor-track-deleted" : ""}`}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.5 }}>
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-                {!t.deleted && t.volume > 0 && <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>}
-                {!t.deleted && t.volume > 0 && <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>}
-              </svg>
-              <span className="veditor-track-label" title={t.label}>{t.label}</span>
+      {/* Video track info */}
+      <div className="veditor-track-section">
+        <span className="veditor-section-label">Video Track</span>
+        <div className="veditor-video-track-row">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+            <line x1="7" y1="2" x2="7" y2="22"/>
+            <line x1="17" y1="2" x2="17" y2="22"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+            <line x1="2" y1="7" x2="7" y2="7"/>
+            <line x1="2" y1="17" x2="7" y2="17"/>
+            <line x1="17" y1="17" x2="22" y2="17"/>
+            <line x1="17" y1="7" x2="22" y2="7"/>
+          </svg>
+          <span className="veditor-track-label">{filePath.split(/[\\\/]/).pop()}</span>
+          <span className="veditor-track-vol-pct" style={{ marginLeft: "auto" }}>
+            {fmtTime(trimEnd - trimStart)} of {fmtTime(duration)}
+          </span>
+        </div>
+      </div>
 
-              {t.deleted ? (
-                <span className="veditor-track-restore" onClick={() => handleRestore(i)}>Restore</span>
-              ) : (
+      {/* Audio tracks */}
+      <div className="veditor-audio">
+        <span className="veditor-section-label">Audio Tracks</span>
+        {tracks.map(track => (
+          <div key={track.index} className={`veditor-track-row${track.deleted ? " veditor-track-deleted" : ""}`}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              {!track.deleted && track.volume > 0 && (
+                <>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                </>
+              )}
+            </svg>
+            <span className="veditor-track-label">{track.label}</span>
+            {track.deleted ? (
+              <button className="veditor-track-restore" onClick={() => restoreTrack(track.index)}>
+                Restore
+              </button>
+            ) : (
+              <>
                 <div className="veditor-track-vol-wrap">
                   <input
-                    type="range" min={0} max={200} step={1}
-                    value={t.volume}
-                    style={{ background: sliderBg(t.volume, 0, 200, fillColor, emptyColor), flex: 1 }}
-                    onChange={e => handleVolume(i, Number(e.target.value))}
-                    aria-label={`Volume for ${t.label}`}
+                    type="range"
+                    min={0}
+                    max={200}
+                    value={track.volume}
+                    onChange={e => setVolume(track.index, Number(e.target.value))}
+                    aria-label={`Volume for ${track.label}`}
                   />
-                  <span className="veditor-track-vol-pct">{t.volume}%</span>
+                  <span className="veditor-track-vol-pct">{track.volume}%</span>
                 </div>
-              )}
-
-              <button
-                className="veditor-track-delete"
-                onClick={() => t.deleted ? handleRestore(i) : handleDelete(i)}
-                title={t.deleted ? "Restore track" : "Remove track"}
-                aria-label={t.deleted ? "Restore track" : "Remove track"}
-              >
-                {t.deleted ? (
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <polyline points="1 4 1 10 7 10"/>
-                    <path d="M3.51 15a9 9 0 1 0 .49-5.95"/>
-                  </svg>
-                ) : (
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <button
+                  className="veditor-track-delete"
+                  onClick={() => deleteTrack(track.index)}
+                  aria-label={`Delete ${track.label}`}
+                  title="Delete this audio track"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="3 6 5 6 21 6"/>
                     <path d="M19 6l-1 14H6L5 6"/>
-                    <path d="M10 11v6"/><path d="M14 11v6"/>
+                    <path d="M10 11v6"/>
+                    <path d="M14 11v6"/>
                     <path d="M9 6V4h6v2"/>
                   </svg>
-                )}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+                </button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
 
-      {/* ── FOOTER ─────────────────────────────────────────────────────── */}
+      {/* Footer */}
       <div className="veditor-footer">
         <span className="veditor-trim-summary">
-          {fmtTime(trimStart)} – {fmtTime(trimEnd)}
-          &nbsp;·&nbsp;
-          {fmtTime(clipLen)}
-          {tracks.some(t => t.deleted) &&
-            ` · ${tracks.filter(t => t.deleted).length} track${tracks.filter(t => t.deleted).length > 1 ? "s" : ""} removed`}
+          Trim: {fmtTime(trimStart)} &rarr; {fmtTime(trimEnd)}
+          &nbsp;&middot;&nbsp;
+          Duration: {fmtTime(trimEnd - trimStart)}
         </span>
         <button className="veditor-cancel" onClick={onCancel}>Cancel</button>
-        <button className="veditor-confirm" onClick={confirm}>Confirm &amp; Back to Settings</button>
+        <button className="veditor-confirm" onClick={handleConfirm}>Confirm &amp; Back</button>
       </div>
     </div>
   );
