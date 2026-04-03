@@ -44,7 +44,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   const videoRef    = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
-  // ── BUG FIX 4: restore previous edits when reopening ──────────────────
+  // Restore previous edits when reopening
   const [playing,     setPlaying]     = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [trimStart,   setTrimStart]   = useState(() => initialEdits?.trimStart ?? 0);
@@ -58,7 +58,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
 
   const dragging = useRef<"start" | "end" | null>(null);
 
-  // build initial track list, restoring volumes/deletions from initialEdits
+  // Build initial track list, restoring volumes/deletions from initialEdits
   const buildTracks = () => {
     const raw = info.audio_tracks ?? [{ index: 0, label: "Track 1", language: "" }];
     return raw.map((t, i) => {
@@ -82,55 +82,41 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
 
   const videoSrc = convertFileSrc(filePath);
 
-  // ── BUG FIX 2 & 3: Web Audio API for live volume + all tracks audible ──
-  // We create one GainNode per track keyed by track index.
-  // The <video> element is connected through AudioContext so all audio
-  // streams are processed together; individual gain nodes let us control
-  // volume per-track in real time.
-  const audioCtxRef  = useRef<AudioContext | null>(null);
-  const gainNodesRef = useRef<Map<number, GainNode>>(new Map());
-  const sourceRef    = useRef<MediaElementAudioSourceNode | null>(null);
+  // ── Compute composite volume from track states and apply to video.volume ──
+  // Web Audio API (AudioContext + MediaElementSource) is unreliable in Tauri's
+  // WebView — it suspends silently on Windows (WebView2) and macOS (WKWebView),
+  // killing all audio output. We use video.volume directly instead:
+  //   • All audio tracks in a video file are decoded together by the media
+  //     engine into one composite output — that's the single stream going
+  //     through video.volume.
+  //   • We approximate per-track control by averaging the active-track volumes
+  //     and writing the result straight to video.volume on every tracks change.
+  //   • Deleted tracks contribute 0 to the average; remaining tracks contribute
+  //     their volume percentage. This gives live, glitch-free volume response.
+  const applyVolume = useCallback((currentTracks: typeof tracks) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const active = currentTracks.filter(t => !t.deleted);
+    if (active.length === 0) {
+      v.volume = 0;
+      return;
+    }
+    const avg = active.reduce((sum, t) => sum + t.volume, 0) / active.length / 100;
+    // video.volume is clamped to [0, 1]; slider goes up to 200% so cap at 1
+    v.volume = Math.min(1, Math.max(0, avg));
+  }, []);
 
+  // Apply volume whenever tracks change
+  useEffect(() => {
+    applyVolume(tracks);
+  }, [tracks, applyVolume]);
+
+  // ── Video event listeners ──────────────────────────────────────────────
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
-    // Wait until the video element is ready before touching AudioContext
-    const setup = () => {
-      if (audioCtxRef.current) return; // already set up
-      try {
-        const ctx = new AudioContext();
-        audioCtxRef.current = ctx;
-
-        const source = ctx.createMediaElementSource(v);
-        sourceRef.current = source;
-
-        // Build a gain node for each track; chain them in series.
-        // All tracks share the same underlying audio mix from the <video>
-        // element — Web Audio doesn't expose separate streams per audio
-        // track from a MediaElementSource, so we use a single gain chain
-        // for the composite mix. Volume changes are applied as a product
-        // of all non-deleted track gains, approximating per-track control.
-        // For a true per-track split the video would need separate <audio>
-        // elements, which requires extracting individual streams server-side.
-        let lastNode: AudioNode = source;
-        tracks.forEach(t => {
-          const gain = ctx.createGain();
-          gain.gain.value = t.deleted ? 0 : t.volume / 100;
-          lastNode.connect(gain);
-          lastNode = gain;
-          gainNodesRef.current.set(t.index, gain);
-        });
-        lastNode.connect(ctx.destination);
-
-        // Resume context on first play (browser autoplay policy)
-        ctx.resume().catch(() => {});
-      } catch (err) {
-        console.warn("[VideoEditor] AudioContext setup failed:", err);
-      }
-    };
-
-    const onCanPlay = () => { setVideoReady(true); setup(); };
+    const onCanPlay = () => setVideoReady(true);
     const onTime = () => {
       setCurrentTime(v.currentTime);
       if (v.currentTime >= trimEndRef.current) {
@@ -139,15 +125,9 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
         setPlaying(false);
       }
     };
-    const onPlay  = () => {
-      audioCtxRef.current?.resume().catch(() => {});
-      setPlaying(true);
-    };
+    const onPlay  = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = (e: Event) => {
-      console.error("[VideoEditor] video error:", (e.target as HTMLVideoElement).error);
-      setVideoReady(true);
-    };
+    const onError = () => setVideoReady(true);
 
     v.addEventListener("canplay",    onCanPlay);
     v.addEventListener("timeupdate", onTime);
@@ -160,30 +140,8 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
       v.removeEventListener("play",       onPlay);
       v.removeEventListener("pause",      onPause);
       v.removeEventListener("error",      onError);
-      // Clean up AudioContext on unmount
-      audioCtxRef.current?.close().catch(() => {});
-      audioCtxRef.current = null;
-      gainNodesRef.current.clear();
-      sourceRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // ── BUG FIX 2: apply live volume changes to gain nodes ────────────────
-  useEffect(() => {
-    tracks.forEach(t => {
-      const gain = gainNodesRef.current.get(t.index);
-      if (!gain) return;
-      const targetGain = t.deleted ? 0 : t.volume / 100;
-      // Use setTargetAtTime for a smooth 20ms ramp to avoid clicks
-      const ctx = audioCtxRef.current;
-      if (ctx) {
-        gain.gain.setTargetAtTime(targetGain, ctx.currentTime, 0.02);
-      } else {
-        gain.gain.value = targetGain;
-      }
-    });
-  }, [tracks]);
 
   // ── Play / pause ───────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
@@ -191,7 +149,6 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     if (!v) return;
     if (v.paused) {
       if (v.currentTime >= trimEndRef.current) v.currentTime = trimStartRef.current;
-      audioCtxRef.current?.resume().catch(() => {});
       v.play().catch(() => {});
     } else {
       v.pause();
@@ -257,7 +214,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     if (dragging.current === "start") {
       const clamped = Math.max(0, Math.min(t, trimEndRef.current - 0.1));
       setTrimStart(clamped);
-      // BUG FIX: snap playhead forward if it falls behind the start handle
+      // Snap playhead forward if it falls behind the start handle
       if (videoRef.current && videoRef.current.currentTime < clamped) {
         videoRef.current.currentTime = clamped;
         setCurrentTime(clamped);
@@ -265,7 +222,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     } else {
       const clamped = Math.max(trimStartRef.current + 0.1, Math.min(t, duration));
       setTrimEnd(clamped);
-      // BUG FIX 1: snap playhead backward if it falls past the end handle
+      // Snap playhead backward if it falls past the end handle
       if (videoRef.current && videoRef.current.currentTime > clamped) {
         videoRef.current.currentTime = clamped;
         setCurrentTime(clamped);
