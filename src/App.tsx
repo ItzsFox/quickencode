@@ -464,7 +464,7 @@ export default function App() {
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
-    runEncode(vbr, DISCORD_AUDIO, "original", "original", out);
+    runEncode(vbr, DISCORD_AUDIO, resolution, fps, out);
   };
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
@@ -484,7 +484,7 @@ export default function App() {
         const infoRaw = await invoke<VideoInfo>("get_video_info", { input: file.path });
         let vbr: number, abr: number, res: string, f: string;
         if (discordMode) {
-          vbr = discordBr(infoRaw.duration_secs); abr = DISCORD_AUDIO; res = "original"; f = "original";
+          vbr = discordBr(infoRaw.duration_secs); abr = DISCORD_AUDIO; res = resolution; f = fps;
         } else {
           const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
           vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
