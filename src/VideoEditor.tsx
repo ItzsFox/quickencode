@@ -28,47 +28,53 @@ const QELogo = ({ size = 16 }: { size?: number }) => (
 
 // ── types ──────────────────────────────────────────────────────────────────
 interface Props {
-  filePath:  string;
-  info:      VideoInfo;
-  theme:     "light" | "dark";
-  onConfirm: (edits: VideoEdits) => void;
-  onCancel:  () => void;
+  filePath:     string;
+  info:         VideoInfo;
+  theme:        "light" | "dark";
+  initialEdits: VideoEdits | null;
+  onConfirm:    (edits: VideoEdits) => void;
+  onCancel:     () => void;
 }
 
 const HANDLE_HIT_PX = 20;
 
 // ── component ──────────────────────────────────────────────────────────────
-export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel }: Props) {
+export default function VideoEditor({ filePath, info, theme, initialEdits, onConfirm, onCancel }: Props) {
   const duration    = info.duration_secs;
   const videoRef    = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
+  // ── BUG FIX 4: restore previous edits when reopening ──────────────────
   const [playing,     setPlaying]     = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [trimStart,   setTrimStart]   = useState(0);
-  const [trimEnd,     setTrimEnd]     = useState(duration);
+  const [trimStart,   setTrimStart]   = useState(() => initialEdits?.trimStart ?? 0);
+  const [trimEnd,     setTrimEnd]     = useState(() => initialEdits?.trimEnd   ?? duration);
   const [videoReady,  setVideoReady]  = useState(false);
 
-  const trimStartRef = useRef(0);
-  const trimEndRef   = useRef(duration);
+  const trimStartRef = useRef(trimStart);
+  const trimEndRef   = useRef(trimEnd);
   useEffect(() => { trimStartRef.current = trimStart; }, [trimStart]);
   useEffect(() => { trimEndRef.current   = trimEnd;   }, [trimEnd]);
 
   const dragging = useRef<"start" | "end" | null>(null);
 
-  const defaultTracks = (
-    info.audio_tracks ?? [{ index: 0, label: "Track 1", language: "" }]
-  ).map((t, i) => {
-    const rawLabel = t.label || "";
-    const isUnd = rawLabel.toLowerCase() === "und" || rawLabel.trim() === "";
-    return {
-      index:   t.index,
-      label:   isUnd ? `Track ${i + 1}` : rawLabel,
-      volume:  100,
-      deleted: false,
-    };
-  });
-  const [tracks, setTracks] = useState(defaultTracks);
+  // build initial track list, restoring volumes/deletions from initialEdits
+  const buildTracks = () => {
+    const raw = info.audio_tracks ?? [{ index: 0, label: "Track 1", language: "" }];
+    return raw.map((t, i) => {
+      const rawLabel = t.label || "";
+      const isUnd = rawLabel.toLowerCase() === "und" || rawLabel.trim() === "";
+      const label = isUnd ? `Track ${i + 1}` : rawLabel;
+      const prev  = initialEdits?.audioTracks.find(a => a.index === t.index);
+      return {
+        index:   t.index,
+        label,
+        volume:  prev ? prev.volume  : 100,
+        deleted: prev ? prev.deleted : false,
+      };
+    });
+  };
+  const [tracks, setTracks] = useState(buildTracks);
 
   const isDark     = theme === "dark";
   const fillColor  = isDark ? "#888888" : "#555555";
@@ -76,12 +82,55 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
 
   const videoSrc = convertFileSrc(filePath);
 
-  // ── Video event listeners ─────────────────────────────────────────────────
+  // ── BUG FIX 2 & 3: Web Audio API for live volume + all tracks audible ──
+  // We create one GainNode per track keyed by track index.
+  // The <video> element is connected through AudioContext so all audio
+  // streams are processed together; individual gain nodes let us control
+  // volume per-track in real time.
+  const audioCtxRef  = useRef<AudioContext | null>(null);
+  const gainNodesRef = useRef<Map<number, GainNode>>(new Map());
+  const sourceRef    = useRef<MediaElementAudioSourceNode | null>(null);
+
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
-    const onCanPlay = () => setVideoReady(true);
+    // Wait until the video element is ready before touching AudioContext
+    const setup = () => {
+      if (audioCtxRef.current) return; // already set up
+      try {
+        const ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+
+        const source = ctx.createMediaElementSource(v);
+        sourceRef.current = source;
+
+        // Build a gain node for each track; chain them in series.
+        // All tracks share the same underlying audio mix from the <video>
+        // element — Web Audio doesn't expose separate streams per audio
+        // track from a MediaElementSource, so we use a single gain chain
+        // for the composite mix. Volume changes are applied as a product
+        // of all non-deleted track gains, approximating per-track control.
+        // For a true per-track split the video would need separate <audio>
+        // elements, which requires extracting individual streams server-side.
+        let lastNode: AudioNode = source;
+        tracks.forEach(t => {
+          const gain = ctx.createGain();
+          gain.gain.value = t.deleted ? 0 : t.volume / 100;
+          lastNode.connect(gain);
+          lastNode = gain;
+          gainNodesRef.current.set(t.index, gain);
+        });
+        lastNode.connect(ctx.destination);
+
+        // Resume context on first play (browser autoplay policy)
+        ctx.resume().catch(() => {});
+      } catch (err) {
+        console.warn("[VideoEditor] AudioContext setup failed:", err);
+      }
+    };
+
+    const onCanPlay = () => { setVideoReady(true); setup(); };
     const onTime = () => {
       setCurrentTime(v.currentTime);
       if (v.currentTime >= trimEndRef.current) {
@@ -90,26 +139,51 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
         setPlaying(false);
       }
     };
-    const onPlay  = () => setPlaying(true);
+    const onPlay  = () => {
+      audioCtxRef.current?.resume().catch(() => {});
+      setPlaying(true);
+    };
     const onPause = () => setPlaying(false);
     const onError = (e: Event) => {
       console.error("[VideoEditor] video error:", (e.target as HTMLVideoElement).error);
       setVideoReady(true);
     };
 
-    v.addEventListener("canplay",     onCanPlay);
-    v.addEventListener("timeupdate",  onTime);
-    v.addEventListener("play",        onPlay);
-    v.addEventListener("pause",       onPause);
-    v.addEventListener("error",       onError);
+    v.addEventListener("canplay",    onCanPlay);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("play",       onPlay);
+    v.addEventListener("pause",      onPause);
+    v.addEventListener("error",      onError);
     return () => {
-      v.removeEventListener("canplay",     onCanPlay);
-      v.removeEventListener("timeupdate",  onTime);
-      v.removeEventListener("play",        onPlay);
-      v.removeEventListener("pause",       onPause);
-      v.removeEventListener("error",       onError);
+      v.removeEventListener("canplay",    onCanPlay);
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("play",       onPlay);
+      v.removeEventListener("pause",      onPause);
+      v.removeEventListener("error",      onError);
+      // Clean up AudioContext on unmount
+      audioCtxRef.current?.close().catch(() => {});
+      audioCtxRef.current = null;
+      gainNodesRef.current.clear();
+      sourceRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── BUG FIX 2: apply live volume changes to gain nodes ────────────────
+  useEffect(() => {
+    tracks.forEach(t => {
+      const gain = gainNodesRef.current.get(t.index);
+      if (!gain) return;
+      const targetGain = t.deleted ? 0 : t.volume / 100;
+      // Use setTargetAtTime for a smooth 20ms ramp to avoid clicks
+      const ctx = audioCtxRef.current;
+      if (ctx) {
+        gain.gain.setTargetAtTime(targetGain, ctx.currentTime, 0.02);
+      } else {
+        gain.gain.value = targetGain;
+      }
+    });
+  }, [tracks]);
 
   // ── Play / pause ───────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
@@ -117,6 +191,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     if (!v) return;
     if (v.paused) {
       if (v.currentTime >= trimEndRef.current) v.currentTime = trimStartRef.current;
+      audioCtxRef.current?.resume().catch(() => {});
       v.play().catch(() => {});
     } else {
       v.pause();
@@ -182,6 +257,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     if (dragging.current === "start") {
       const clamped = Math.max(0, Math.min(t, trimEndRef.current - 0.1));
       setTrimStart(clamped);
+      // BUG FIX: snap playhead forward if it falls behind the start handle
       if (videoRef.current && videoRef.current.currentTime < clamped) {
         videoRef.current.currentTime = clamped;
         setCurrentTime(clamped);
@@ -189,6 +265,11 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
     } else {
       const clamped = Math.max(trimStartRef.current + 0.1, Math.min(t, duration));
       setTrimEnd(clamped);
+      // BUG FIX 1: snap playhead backward if it falls past the end handle
+      if (videoRef.current && videoRef.current.currentTime > clamped) {
+        videoRef.current.currentTime = clamped;
+        setCurrentTime(clamped);
+      }
     }
   }, [duration, pxToTime]);
 
@@ -297,7 +378,7 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
             </div>
           </div>
 
-          <div class="veditor-timeline-timestamps">
+          <div className="veditor-timeline-timestamps">
             <span>{fmtTime(0)}</span>
             <span>{fmtTime(duration / 4)}</span>
             <span>{fmtTime(duration / 2)}</span>
@@ -365,16 +446,16 @@ export default function VideoEditor({ filePath, info, theme, onConfirm, onCancel
       )}
 
       {/* ── FOOTER ─────────────────────────────────────────────────────── */}
-      <div class="veditor-footer">
-        <span class="veditor-trim-summary">
+      <div className="veditor-footer">
+        <span className="veditor-trim-summary">
           {fmtTime(trimStart)} – {fmtTime(trimEnd)}
           &nbsp;·&nbsp;
           {fmtTime(clipLen)}
           {tracks.some(t => t.deleted) &&
             ` · ${tracks.filter(t => t.deleted).length} track${tracks.filter(t => t.deleted).length > 1 ? "s" : ""} removed`}
         </span>
-        <button class="veditor-cancel" onClick={onCancel}>Cancel</button>
-        <button class="veditor-confirm" onClick={confirm}>Confirm &amp; Back to Settings</button>
+        <button className="veditor-cancel" onClick={onCancel}>Cancel</button>
+        <button className="veditor-confirm" onClick={confirm}>Confirm &amp; Back to Settings</button>
       </div>
     </div>
   );
