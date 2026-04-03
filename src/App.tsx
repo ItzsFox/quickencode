@@ -42,8 +42,8 @@ interface BatchDoneResult {
 
 /** State produced by the VideoEditor and consumed by runEncode */
 export interface VideoEdits {
-  trimStart:    number;
-  trimEnd:      number;
+  trimStart:    number;   // seconds
+  trimEnd:      number;   // seconds
   audioTracks:  { index: number; volume: number; deleted: boolean }[];
 }
 
@@ -107,6 +107,8 @@ const DiscordIcon = () => (
 );
 
 type Screen = "drop" | "loading" | "editor" | "batch" | "done" | "batch-done";
+
+// ── Sub-components lifted outside App to prevent remount on every render ──
 
 interface WordmarkProps { size?: "sm" | "base"; }
 function Wordmark({ size = "base" }: WordmarkProps) {
@@ -213,6 +215,9 @@ function QualitySettings({ quality, resolution, format, audio, fps, theme, onQua
   );
 }
 
+// ─────────────────────────────────────────────────────────
+// MAIN APP
+// ─────────────────────────────────────────────────────────
 export default function App() {
   const initTheme = (): "light" | "dark" => {
     try { return (localStorage.getItem("qe_theme") as "light" | "dark") ?? "light"; }
@@ -250,6 +255,7 @@ export default function App() {
   const [status, setStatus]         = useState("");
   const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
 
+  // Video editor state
   const [showEditor, setShowEditor] = useState(false);
   const [videoEdits, setVideoEdits] = useState<VideoEdits | null>(null);
 
@@ -410,8 +416,8 @@ export default function App() {
     setEncoding(true);
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     try {
-      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                ? videoEdits.trimStart : null;
-      const trimEndArg   = (videoEdits && videoEdits.trimEnd < info.duration_secs) ? videoEdits.trimEnd   : null;
+      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                  ? videoEdits.trimStart : null;
+      const trimEndArg   = (videoEdits && videoEdits.trimEnd < info.duration_secs)   ? videoEdits.trimEnd   : null;
       const deletedTracks  = videoEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
       const volumeMap      = videoEdits?.audioTracks
         .filter(t => !t.deleted && t.volume !== 100)
@@ -557,7 +563,6 @@ export default function App() {
           filePath={filePath}
           info={info}
           theme={theme}
-          initialEdits={videoEdits ?? undefined}
           onConfirm={(edits) => {
             setVideoEdits(edits);
             setShowEditor(false);
