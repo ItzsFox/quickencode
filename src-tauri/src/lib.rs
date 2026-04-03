@@ -13,6 +13,8 @@ pub fn run() {
             commands::get_file_size_mb,
             commands::show_in_folder,
             commands::open_folder,
+            commands::extract_audio_track,
+            commands::clear_preview_track_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error running app");
