@@ -7,6 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# ffmpeg 2-pass passthroughs
+*.mbtree
+ffmpeg2pass-*.log
+
 node_modules
 dist
 dist-ssr
