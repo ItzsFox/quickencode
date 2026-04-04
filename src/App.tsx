@@ -148,6 +148,7 @@ interface QualitySettingsProps {
   audio: number;
   fps: string;
   useAv1: boolean;
+  useGpu: boolean;
   theme: "light" | "dark";
   onQuality: (v: number) => void;
   onRes: (v: string) => void;
@@ -155,8 +156,9 @@ interface QualitySettingsProps {
   onAudio: (v: number) => void;
   onFps: (v: string) => void;
   onAv1: (v: boolean) => void;
+  onGpu: (v: boolean) => void;
 }
-function QualitySettings({ quality, resolution, format, audio, fps, useAv1, theme, onQuality, onRes, onFmt, onAudio, onFps, onAv1 }: QualitySettingsProps) {
+function QualitySettings({ quality, resolution, format, audio, fps, useAv1, useGpu, theme, onQuality, onRes, onFmt, onAudio, onFps, onAv1, onGpu }: QualitySettingsProps) {
   const ql = qualityInfo(quality);
   const isDark = theme === "dark";
   const bg = (val: number, min: number, max: number) =>
@@ -218,12 +220,28 @@ function QualitySettings({ quality, resolution, format, audio, fps, useAv1, them
               id="av1-checkbox"
               type="checkbox"
               checked={useAv1}
-              onChange={e => onAv1(e.target.checked)}
+              onChange={e => {
+                onAv1(e.target.checked);
+                if (!e.target.checked) onGpu(false);
+              }}
             />
             <span className="av1-toggle-label">AV1 encoder</span>
             {useAv1 && <span className="av1-slow-badge">slower encode</span>}
             {!useAv1 && <span className="av1-hint">better quality, longer encode</span>}
           </label>
+          {useAv1 && (
+            <label className="av1-toggle gpu-toggle" htmlFor="gpu-checkbox" title="Uses NVIDIA av1_nvenc — much faster, requires RTX 40-series GPU">
+              <input
+                id="gpu-checkbox"
+                type="checkbox"
+                checked={useGpu}
+                onChange={e => onGpu(e.target.checked)}
+              />
+              <span className="av1-toggle-label">GPU accelerated</span>
+              {useGpu && <span className="av1-slow-badge gpu-badge">NVENC</span>}
+              {!useGpu && <span className="av1-hint">NVIDIA RTX 40+</span>}
+            </label>
+          )}
         </div>
       </div>
     </>
@@ -265,6 +283,7 @@ export default function App() {
   const [audio, setAudio]           = useState(128);
   const [fps, setFps]               = useState("original");
   const [useAv1, setUseAv1]         = useState(false);
+  const [useGpu, setUseGpu]         = useState(false);
   const [encoding, setEncoding]     = useState(false);
   const [progress, setProgress]     = useState<EncodeProgress | null>(null);
   const [fsImage, setFsImage]       = useState<{src: string; label: string} | null>(null);
@@ -300,7 +319,7 @@ export default function App() {
   const estHigh = estMb * 1.15;
   const reduction = info ? Math.round((1 - estMb / (info.size_mb * trimRatio + 0.001)) * 100) : 0;
 
-  const loadEncodedFrame = useCallback((idx: number, vbr: number, res: string, f: string, av1: boolean) => {
+  const loadEncodedFrame = useCallback((idx: number, vbr: number, res: string, f: string, av1: boolean, gpu: boolean) => {
     if (!filePath || !info) return;
     if (encDebounce.current) clearTimeout(encDebounce.current);
     setEncLoading(true);
@@ -309,7 +328,7 @@ export default function App() {
       try {
         const result = await invoke<string>("get_encoded_frame", {
           input: filePath, timestamp: ts, resolution: res,
-          videoBitrateKbps: vbr, fps: f, useAv1: av1,
+          videoBitrateKbps: vbr, fps: f, useAv1: av1, useGpu: gpu,
         });
         if (mountedRef.current) setEncFrames(prev => ({ ...prev, [idx]: result }));
       } catch (e) {
@@ -323,13 +342,13 @@ export default function App() {
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     setEncFrames({});
-    loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1);
+    loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1, useGpu);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoBr, resolution, fps, useAv1, screen]);
+  }, [videoBr, resolution, fps, useAv1, useGpu, screen]);
 
   useEffect(() => {
     if (screen !== "editor" || !info) return;
-    if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1);
+    if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1, useGpu);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameIdx]);
 
@@ -352,12 +371,12 @@ export default function App() {
       setScreen("editor");
       const b = resolution === "original" ? videoInfo.bitrate_kbps : (RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps);
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
-      loadEncodedFrame(0, vbr, resolution, fps, useAv1);
+      loadEncodedFrame(0, vbr, resolution, fps, useAv1, useGpu);
     } catch (e) {
       setStatus(`❌ ${e}`);
       setScreen("drop");
     }
-  }, [resolution, quality, fps, useAv1, loadEncodedFrame]);
+  }, [resolution, quality, fps, useAv1, useGpu, loadEncodedFrame]);
 
   const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
     const videos: string[] = [];
@@ -425,11 +444,12 @@ export default function App() {
   const goFrame = (delta: number) =>
     setFrameIdx(i => Math.max(0, Math.min(FRAME_COUNT - 1, i + delta)));
 
-  const runEncode = async (vbr: number, abr: number, res: string, f: string, outPath?: string, av1Override?: boolean) => {
+  const runEncode = async (vbr: number, abr: number, res: string, f: string, outPath?: string, av1Override?: boolean, gpuOverride?: boolean) => {
     if (!filePath || !info) return;
     const out = outPath ?? await save({ filters: [{ name: "Output", extensions: [format] }] });
     if (!out) return;
     const encodeWithAv1 = av1Override ?? useAv1;
+    const encodeWithGpu = gpuOverride ?? useGpu;
     setEncoding(true);
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     try {
@@ -455,6 +475,7 @@ export default function App() {
         volumeMap,
         totalAudioTracks,
         useAv1:           encodeWithAv1,
+        useGpu:           encodeWithGpu,
       });
       let finalMb = estMb;
       try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
@@ -478,8 +499,7 @@ export default function App() {
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
-    // Discord preset respects the AV1 toggle — bitrate cap stays the same so ≤10 MB is preserved
-    runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, useAv1);
+    runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, useAv1, useGpu);
   };
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
@@ -513,6 +533,7 @@ export default function App() {
           deletedTracks: [], volumeMap: {},
           totalAudioTracks: infoRaw.audio_tracks?.length ?? 1,
           useAv1,
+          useGpu,
         });
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
         succeeded++;
@@ -570,11 +591,14 @@ export default function App() {
       })()
     : null;
 
-  // Progress pass label — AV1 is single pass, x264 is 2-pass
+  // Progress pass label
   const passLabel = (() => {
     if (!progress) return "";
     if (progress.percent >= 100) return "Finalizing";
-    if (useAv1) return "Pass 1 / 1 — Encoding";
+    if (useAv1) {
+      const enc = useGpu ? "GPU · av1_nvenc" : "CPU · SVT-AV1";
+      return `Pass 1 / 1 — ${enc}`;
+    }
     if (progress.pass === 1) return "Pass 1 / 2 — Analyzing";
     return "Pass 2 / 2 — Encoding";
   })();
@@ -763,9 +787,9 @@ export default function App() {
             <div className="batch-settings-row settings-row">
               <QualitySettings
                 quality={quality} resolution={resolution} format={format} audio={audio} fps={fps}
-                useAv1={useAv1} theme={theme}
+                useAv1={useAv1} useGpu={useGpu} theme={theme}
                 onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
-                onAv1={setUseAv1}
+                onAv1={setUseAv1} onGpu={setUseGpu}
               />
             </div>
             <div className="batch-actions">
@@ -851,7 +875,10 @@ export default function App() {
                   ) : (
                     <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
                   )}
-                  <span className="preview-tag">Output {useAv1 && <span className="preview-tag-av1">AV1</span>}</span>
+                  <span className="preview-tag">
+                    Output
+                    {useAv1 && <span className="preview-tag-av1">{useGpu ? "AV1·GPU" : "AV1"}</span>}
+                  </span>
                   {currentEnc && !encLoading && (
                     <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>&#x26F6;</button>
                   )}
@@ -873,9 +900,9 @@ export default function App() {
           <div className="settings-row">
             <QualitySettings
               quality={quality} resolution={resolution} format={format} audio={audio} fps={fps}
-              useAv1={useAv1} theme={theme}
+              useAv1={useAv1} useGpu={useGpu} theme={theme}
               onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
-              onAv1={setUseAv1}
+              onAv1={setUseAv1} onGpu={setUseGpu}
             />
           </div>
 
