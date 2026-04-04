@@ -174,7 +174,7 @@ fn audio_label(stream: &serde_json::Value, one_based_index: usize) -> String {
     format!("Track {}", one_based_index)
 }
 
-// ── get_video_info ───────────────────────────────────────────────────────────────
+// ── get_video_info ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo, String> {
@@ -234,7 +234,7 @@ pub fn get_video_info(app: tauri::AppHandle, input: String) -> Result<VideoInfo,
     Ok(VideoInfo { duration_secs, size_mb, bitrate_kbps, width, height, audio_tracks })
 }
 
-// ── extract_audio_track ───────────────────────────────────────────────────────────────
+// ── extract_audio_track ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn extract_audio_track(
@@ -280,7 +280,7 @@ pub async fn extract_audio_track(
     .map_err(|e| e.to_string())?
 }
 
-// ── clear_preview_track_cache ───────────────────────────────────────────────────────────────
+// ── clear_preview_track_cache ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn clear_preview_track_cache() {
@@ -296,7 +296,7 @@ pub fn clear_preview_track_cache() {
     }
 }
 
-// ── get_video_frames ─────────────────────────────────────────────────────────────────
+// ── get_video_frames ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_video_frames(
@@ -336,10 +336,8 @@ pub async fn get_video_frames(
     .await.map_err(|e| e.to_string())?
 }
 
-// ── get_encoded_frame ─────────────────────────────────────────────────────────────────
+// ── get_encoded_frame ──────────────────────────────────────────────────────────────────
 
-/// Renders a short preview clip and extracts one frame from it.
-/// When use_av1=true, uses libsvtav1 preset 12 (fastest) for the preview clip.
 #[tauri::command]
 pub async fn get_encoded_frame(
     app: tauri::AppHandle,
@@ -374,7 +372,6 @@ pub async fn get_encoded_frame(
         if !vf_parts.is_empty() { args.extend(["-vf".into(), vf_parts.join(",")]); }
 
         if use_av1 {
-            // Fast AV1 preview: single-pass libsvtav1 preset 12 (ultrafast), crf 35
             args.extend([
                 "-c:v".into(), "libsvtav1".into(),
                 "-preset".into(), "12".into(),
@@ -405,19 +402,8 @@ pub async fn get_encoded_frame(
     .await.map_err(|e| e.to_string())?
 }
 
-// ── encode_video_with_progress ────────────────────────────────────────────────────────────
+// ── encode_video_with_progress ──────────────────────────────────────────────────────────────────
 
-/// Encodes a video file with real-time progress reporting.
-///
-/// When use_av1=true:
-///   - Uses libsvtav1 (single-pass CRF mode) — no 2-pass, progress goes 0→100
-///   - CRF is derived from quality (0–100 slider) mapped to SVT-AV1 range 1–63
-///     (quality=100 → crf=1, quality=0 → crf=63)
-///   - maxrate = video_bitrate_kbps * 1.5k, bufsize = video_bitrate_kbps * 3k
-///     This ensures the Discord ≤10 MB target is respected even in CRF mode.
-///
-/// When use_av1=false:
-///   - Existing 2-pass libx264 logic unchanged.
 #[tauri::command]
 pub async fn encode_video_with_progress(
     app: tauri::AppHandle,
@@ -475,20 +461,9 @@ pub async fn encode_video_with_progress(
             volume_map.get(i).copied().unwrap_or(100) != 100
         });
 
-        // ── AV1 single-pass path ─────────────────────────────────────────────
+        // ── AV1 single-pass path ──────────────────────────────────────────────────────
         if use_av1 {
-            // Map quality slider (5–100) → SVT-AV1 CRF (55 down to 1)
-            // quality=100 → crf=1 (near lossless), quality=5 → crf=55 (very low)
-            let crf = (55.0 - (video_bitrate_kbps as f64 / video_bitrate_kbps.max(1) as f64 * 0.0))
-                .max(1.0) as u32;
-            // Actually derive CRF from the quality percentage passed via video_bitrate_kbps
-            // The frontend passes quality as a bitrate target; we use maxrate for the size cap
-            // and let CRF control quality. We expose a simple linear mapping:
-            // Since we only have video_bitrate_kbps here (not raw quality %), we use
-            // maxrate + bufsize to enforce the size cap while CRF=28 gives good AV1 quality.
-            // The Discord preset passes a low bitrate, so maxrate will clamp it appropriately.
-            let _ = crf; // suppress unused warning from above
-            let av1_crf = 28u32; // good default AV1 quality; maxrate enforces the cap
+            let av1_crf = 28u32;
             let maxrate = format!("{}k", (video_bitrate_kbps as f64 * 1.5) as u32);
             let bufsize = format!("{}k", video_bitrate_kbps * 3);
 
@@ -528,23 +503,23 @@ pub async fn encode_video_with_progress(
 
             av1_args.extend([
                 "-c:v".into(), "libsvtav1".into(),
-                "-preset".into(), "6".into(),  // balanced speed/quality (0=slowest, 13=fastest)
+                "-preset".into(), "6".into(),
                 "-crf".into(), av1_crf.to_string(),
                 "-maxrate".into(), maxrate,
                 "-bufsize".into(), bufsize,
-                "-svtav1-params".into(), "tune=0".into(), // tune=0: visual quality (PSNR-focused)
+                "-svtav1-params".into(), "tune=0".into(),
                 "-c:a".into(), "aac".into(),
                 "-b:a".into(), audio_ba,
                 "-progress".into(), "pipe:1".into(),
                 "-nostats".into(),
-                output,
+                output.clone(),
             ]);
 
             let mut child = Command::new(&ffmpeg)
                 .args(&av1_args)
                 .no_window()
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::piped()) // capture stderr so we can report errors
                 .spawn().map_err(|e| e.to_string())?;
 
             let stdout  = child.stdout.take().unwrap();
@@ -572,14 +547,31 @@ pub async fn encode_video_with_progress(
                     }
                 }
             }
-            child.wait().map_err(|e| e.to_string())?;
+
+            let status = child.wait().map_err(|e| e.to_string())?;
+            if !status.success() {
+                // Try to collect stderr for a useful error message
+                return Err(format!(
+                    "FFmpeg AV1 encode failed (exit code {:?}). Make sure libsvtav1 is supported by your ffmpeg build.",
+                    status.code()
+                ));
+            }
+
+            // Verify the output file was actually written
+            let out_size = std::fs::metadata(&output)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            if out_size == 0 {
+                return Err("AV1 encode produced an empty output file. libsvtav1 may not be available in your ffmpeg build.".into());
+            }
+
             let _ = app.emit("encode-progress", EncodeProgress {
                 percent: 100.0, eta_secs: 0.0, pass: 1,
             });
             return Ok("Done".into());
         }
 
-        // ── x264 2-pass path (original logic) ───────────────────────────────
+        // ── x264 2-pass path (original logic) ──────────────────────────────────────
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 0.0, eta_secs: 0.0, pass: 1,
         });
@@ -681,7 +673,7 @@ pub async fn encode_video_with_progress(
             "-passlogfile".into(), passlog_str,
             "-c:a".into(), "aac".into(),
             "-b:a".into(), audio_ba,
-            output,
+            output.clone(),
         ]);
 
         let mut child = Command::new(&ffmpeg)
@@ -716,7 +708,17 @@ pub async fn encode_video_with_progress(
                 }
             }
         }
-        child.wait().map_err(|e| e.to_string())?;
+        let status = child.wait().map_err(|e| e.to_string())?;
+        if !status.success() { return Err("FFmpeg pass 2 failed".into()); }
+
+        // Verify the output file was actually written
+        let out_size = std::fs::metadata(&output)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if out_size == 0 {
+            return Err("Encode produced an empty output file.".into());
+        }
+
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 100.0, eta_secs: 0.0, pass: 2,
         });
