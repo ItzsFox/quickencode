@@ -373,8 +373,8 @@ pub async fn get_encoded_frame(
         let frame_s = frame.to_str().unwrap().to_string();
         let ts_str  = format!("{:.3}", timestamp);
         let bv      = format!("{}k", video_bitrate_kbps);
-        let maxrate = format!("{}k", (video_bitrate_kbps as f64 * 1.5) as u32);
-        let bufsize = format!("{}k", video_bitrate_kbps * 2);
+        let maxrate = format!("{}k", video_bitrate_kbps);
+        let bufsize = format!("{}k", video_bitrate_kbps);
 
         let mut vf_parts: Vec<String> = vec![];
         match resolution.as_str() {
@@ -392,7 +392,6 @@ pub async fn get_encoded_frame(
 
         if use_av1 {
             if use_gpu {
-                // NVIDIA hardware AV1 — fast, quality-controlled via -cq
                 args.extend([
                     "-c:v".into(), "av1_nvenc".into(),
                     "-preset".into(), "p4".into(),
@@ -405,10 +404,12 @@ pub async fn get_encoded_frame(
             } else {
                 let av1_enc = probe_av1_encoder(&ffmpeg);
                 if av1_enc == "libsvtav1" {
+                    // SVT-AV1 CRF preview: must pair -crf with -b:v 0
                     args.extend([
                         "-c:v".into(), "libsvtav1".into(),
                         "-preset".into(), "12".into(),
                         "-crf".into(), "35".into(),
+                        "-b:v".into(), "0".into(),
                         "-an".into(), clip_s.clone(),
                     ]);
                 } else {
@@ -507,11 +508,11 @@ pub async fn encode_video_with_progress(
 
         // ── AV1 single-pass path ──────────────────────────────────────────────────────
         if use_av1 {
-            // Hard bitrate cap: -b:v + -maxrate + -bufsize guarantees the output
-            // stays at/near the target, critical for Discord Ready (<= 9 MB).
-            // Pure CRF mode ignores video_bitrate_kbps entirely.
-            let maxrate = format!("{}k", (video_bitrate_kbps as f64 * 1.5) as u32);
-            let bufsize = format!("{}k", video_bitrate_kbps * 2);
+            // Tight bitrate cap: maxrate = target, bufsize = target.
+            // This keeps the output at/near video_bitrate_kbps, which is
+            // critical for Discord Ready (target <= 9 MB total).
+            let maxrate = video_bv.clone();
+            let bufsize = video_bv.clone();
 
             let _ = app.emit("encode-progress", EncodeProgress {
                 percent: 0.0, eta_secs: 0.0, pass: 1,
@@ -549,7 +550,6 @@ pub async fn encode_video_with_progress(
 
             if use_gpu {
                 // NVIDIA hardware AV1 encoder — much faster than CPU encoders.
-                // Uses -cq for quality + hard bitrate cap for size control.
                 av1_args.extend([
                     "-c:v".into(), "av1_nvenc".into(),
                     "-preset".into(), "p4".into(),
