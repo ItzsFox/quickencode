@@ -508,12 +508,6 @@ pub async fn encode_video_with_progress(
 
         // ── AV1 single-pass path ──────────────────────────────────────────────────────
         if use_av1 {
-            // Tight bitrate cap: maxrate = target, bufsize = target.
-            // This keeps the output at/near video_bitrate_kbps, which is
-            // critical for Discord Ready (target <= 9 MB total).
-            let maxrate = video_bv.clone();
-            let bufsize = video_bv.clone();
-
             let _ = app.emit("encode-progress", EncodeProgress {
                 percent: 0.0, eta_secs: 0.0, pass: 1,
             });
@@ -549,7 +543,9 @@ pub async fn encode_video_with_progress(
             }
 
             if use_gpu {
-                // NVIDIA hardware AV1 encoder — much faster than CPU encoders.
+                // NVIDIA hardware AV1 encoder — supports -maxrate/-bufsize.
+                let maxrate = video_bv.clone();
+                let bufsize = video_bv.clone();
                 av1_args.extend([
                     "-c:v".into(), "av1_nvenc".into(),
                     "-preset".into(), "p4".into(),
@@ -561,16 +557,20 @@ pub async fn encode_video_with_progress(
             } else {
                 let av1_enc = probe_av1_encoder(&ffmpeg);
                 if av1_enc == "libsvtav1" {
+                    // SVT-AV1 does NOT support -maxrate/-bufsize.
+                    // Use VBR mode via -b:v only (no rate caps).
+                    // The bitrate calculation in the frontend already targets the
+                    // correct size, so this is sufficient for Discord Ready.
                     av1_args.extend([
                         "-c:v".into(), "libsvtav1".into(),
                         "-preset".into(), "6".into(),
                         "-b:v".into(), video_bv.clone(),
-                        "-maxrate".into(), maxrate,
-                        "-bufsize".into(), bufsize,
                         "-svtav1-params".into(), "tune=0".into(),
                     ]);
                 } else {
-                    // libaom-av1 fallback
+                    // libaom-av1 supports -maxrate/-bufsize in VBR mode.
+                    let maxrate = video_bv.clone();
+                    let bufsize = video_bv.clone();
                     av1_args.extend([
                         "-c:v".into(), "libaom-av1".into(),
                         "-cpu-used".into(), "4".into(),
