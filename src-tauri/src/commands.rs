@@ -363,6 +363,7 @@ pub async fn get_encoded_frame(
     video_bitrate_kbps: u32,
     fps: String,
     use_av1: bool,
+    use_gpu: bool,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg  = resolve_bin(&app, "ffmpeg")?;
@@ -372,6 +373,8 @@ pub async fn get_encoded_frame(
         let frame_s = frame.to_str().unwrap().to_string();
         let ts_str  = format!("{:.3}", timestamp);
         let bv      = format!("{}k", video_bitrate_kbps);
+        let maxrate = format!("{}k", (video_bitrate_kbps as f64 * 1.5) as u32);
+        let bufsize = format!("{}k", video_bitrate_kbps * 2);
 
         let mut vf_parts: Vec<String> = vec![];
         match resolution.as_str() {
@@ -388,23 +391,35 @@ pub async fn get_encoded_frame(
         if !vf_parts.is_empty() { args.extend(["-vf".into(), vf_parts.join(",")]); }
 
         if use_av1 {
-            let av1_enc = probe_av1_encoder(&ffmpeg);
-            if av1_enc == "libsvtav1" {
+            if use_gpu {
+                // NVIDIA hardware AV1 — fast, quality-controlled via -cq
                 args.extend([
-                    "-c:v".into(), "libsvtav1".into(),
-                    "-preset".into(), "12".into(),
-                    "-crf".into(), "35".into(),
+                    "-c:v".into(), "av1_nvenc".into(),
+                    "-preset".into(), "p4".into(),
+                    "-cq".into(), "28".into(),
+                    "-b:v".into(), bv,
+                    "-maxrate".into(), maxrate,
+                    "-bufsize".into(), bufsize,
                     "-an".into(), clip_s.clone(),
                 ]);
             } else {
-                // libaom-av1: use -cpu-used instead of -preset
-                args.extend([
-                    "-c:v".into(), "libaom-av1".into(),
-                    "-cpu-used".into(), "8".into(),
-                    "-crf".into(), "35".into(),
-                    "-b:v".into(), "0".into(),
-                    "-an".into(), clip_s.clone(),
-                ]);
+                let av1_enc = probe_av1_encoder(&ffmpeg);
+                if av1_enc == "libsvtav1" {
+                    args.extend([
+                        "-c:v".into(), "libsvtav1".into(),
+                        "-preset".into(), "12".into(),
+                        "-crf".into(), "35".into(),
+                        "-an".into(), clip_s.clone(),
+                    ]);
+                } else {
+                    args.extend([
+                        "-c:v".into(), "libaom-av1".into(),
+                        "-cpu-used".into(), "8".into(),
+                        "-crf".into(), "35".into(),
+                        "-b:v".into(), "0".into(),
+                        "-an".into(), clip_s.clone(),
+                    ]);
+                }
             }
         } else {
             args.extend([
@@ -448,6 +463,7 @@ pub async fn encode_video_with_progress(
     volume_map: HashMap<usize, u32>,
     total_audio_tracks: usize,
     use_av1: bool,
+    use_gpu: bool,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg      = resolve_bin(&app, "ffmpeg")?;
@@ -491,10 +507,11 @@ pub async fn encode_video_with_progress(
 
         // ── AV1 single-pass path ──────────────────────────────────────────────────────
         if use_av1 {
-            let av1_enc = probe_av1_encoder(&ffmpeg);
-            let av1_crf = 28u32;
+            // Hard bitrate cap: -b:v + -maxrate + -bufsize guarantees the output
+            // stays at/near the target, critical for Discord Ready (<= 9 MB).
+            // Pure CRF mode ignores video_bitrate_kbps entirely.
             let maxrate = format!("{}k", (video_bitrate_kbps as f64 * 1.5) as u32);
-            let bufsize = format!("{}k", video_bitrate_kbps * 3);
+            let bufsize = format!("{}k", video_bitrate_kbps * 2);
 
             let _ = app.emit("encode-progress", EncodeProgress {
                 percent: 0.0, eta_secs: 0.0, pass: 1,
@@ -530,25 +547,38 @@ pub async fn encode_video_with_progress(
                 }
             }
 
-            if av1_enc == "libsvtav1" {
+            if use_gpu {
+                // NVIDIA hardware AV1 encoder — much faster than CPU encoders.
+                // Uses -cq for quality + hard bitrate cap for size control.
                 av1_args.extend([
-                    "-c:v".into(), "libsvtav1".into(),
-                    "-preset".into(), "6".into(),
-                    "-crf".into(), av1_crf.to_string(),
+                    "-c:v".into(), "av1_nvenc".into(),
+                    "-preset".into(), "p4".into(),
+                    "-cq".into(), "28".into(),
+                    "-b:v".into(), video_bv.clone(),
                     "-maxrate".into(), maxrate,
                     "-bufsize".into(), bufsize,
-                    "-svtav1-params".into(), "tune=0".into(),
                 ]);
             } else {
-                // libaom-av1 fallback — no -preset, use -cpu-used
-                av1_args.extend([
-                    "-c:v".into(), "libaom-av1".into(),
-                    "-cpu-used".into(), "4".into(),
-                    "-crf".into(), av1_crf.to_string(),
-                    "-b:v".into(), "0".into(),
-                    "-maxrate".into(), maxrate,
-                    "-bufsize".into(), bufsize,
-                ]);
+                let av1_enc = probe_av1_encoder(&ffmpeg);
+                if av1_enc == "libsvtav1" {
+                    av1_args.extend([
+                        "-c:v".into(), "libsvtav1".into(),
+                        "-preset".into(), "6".into(),
+                        "-b:v".into(), video_bv.clone(),
+                        "-maxrate".into(), maxrate,
+                        "-bufsize".into(), bufsize,
+                        "-svtav1-params".into(), "tune=0".into(),
+                    ]);
+                } else {
+                    // libaom-av1 fallback
+                    av1_args.extend([
+                        "-c:v".into(), "libaom-av1".into(),
+                        "-cpu-used".into(), "4".into(),
+                        "-b:v".into(), video_bv.clone(),
+                        "-maxrate".into(), maxrate,
+                        "-bufsize".into(), bufsize,
+                    ]);
+                }
             }
 
             av1_args.extend([
@@ -594,9 +624,10 @@ pub async fn encode_video_with_progress(
 
             let status = child.wait().map_err(|e| e.to_string())?;
             if !status.success() {
+                let enc_name = if use_gpu { "av1_nvenc" } else { probe_av1_encoder(&ffmpeg) };
                 return Err(format!(
                     "FFmpeg AV1 encode failed (exit code {:?}) using {}.",
-                    status.code(), av1_enc
+                    status.code(), enc_name
                 ));
             }
 
@@ -604,7 +635,8 @@ pub async fn encode_video_with_progress(
                 .map(|m| m.len())
                 .unwrap_or(0);
             if out_size == 0 {
-                return Err(format!("AV1 encode ({av1_enc}) produced an empty output file."));
+                let enc_name = if use_gpu { "av1_nvenc" } else { probe_av1_encoder(&ffmpeg) };
+                return Err(format!("AV1 encode ({enc_name}) produced an empty output file."));
             }
 
             let _ = app.emit("encode-progress", EncodeProgress {
