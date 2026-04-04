@@ -471,10 +471,6 @@ export default function App() {
   const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
   const handleDiscord = async () => {
     if (!info) return;
-    if (info.size_mb <= DISCORD_TARGET) {
-      setStatus(`✅ Already under ${DISCORD_TARGET} MB — no compression needed.`);
-      return;
-    }
     const effectiveDuration = videoEdits
       ? videoEdits.trimEnd - videoEdits.trimStart
       : info.duration_secs;
