@@ -21,7 +21,7 @@ quick encode is a desktop app that compresses video files using FFmpeg's 2-pass 
 - 📦 **Batch encode** — drop a folder or select multiple files, encode them all at once
 - 💬 **Discord preset** — one click to target ≤9 MB (ideal for Discord uploads)
 - 🌙 **Light / dark mode**
-- ✂️ **Video Editor** — Trim your clip before encoding.
+- ✂️ **Video Editor** — trim your clip before encoding and adjust audio tracks volume.
 - ✅ **Encode complete screen** — shows real output size, compression %, and a shortcut to open the output folder
 
 ---
