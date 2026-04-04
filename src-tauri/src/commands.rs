@@ -47,6 +47,22 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
     }
 }
 
+// ── probe_av1_encoder ─────────────────────────────────────────────────────────
+// Returns "libsvtav1" if available, otherwise "libaom-av1".
+fn probe_av1_encoder(ffmpeg: &std::path::Path) -> &'static str {
+    let out = Command::new(ffmpeg)
+        .args(["-encoders", "-v", "quiet"])
+        .no_window()
+        .output();
+    if let Ok(o) = out {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        if stdout.contains("libsvtav1") {
+            return "libsvtav1";
+        }
+    }
+    "libaom-av1"
+}
+
 const VIDEO_EXTS: &[&str] = &["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"];
 fn is_video(path: &std::path::Path) -> bool {
     path.extension()
@@ -372,12 +388,24 @@ pub async fn get_encoded_frame(
         if !vf_parts.is_empty() { args.extend(["-vf".into(), vf_parts.join(",")]); }
 
         if use_av1 {
-            args.extend([
-                "-c:v".into(), "libsvtav1".into(),
-                "-preset".into(), "12".into(),
-                "-crf".into(), "35".into(),
-                "-an".into(), clip_s.clone(),
-            ]);
+            let av1_enc = probe_av1_encoder(&ffmpeg);
+            if av1_enc == "libsvtav1" {
+                args.extend([
+                    "-c:v".into(), "libsvtav1".into(),
+                    "-preset".into(), "12".into(),
+                    "-crf".into(), "35".into(),
+                    "-an".into(), clip_s.clone(),
+                ]);
+            } else {
+                // libaom-av1: use -cpu-used instead of -preset
+                args.extend([
+                    "-c:v".into(), "libaom-av1".into(),
+                    "-cpu-used".into(), "8".into(),
+                    "-crf".into(), "35".into(),
+                    "-b:v".into(), "0".into(),
+                    "-an".into(), clip_s.clone(),
+                ]);
+            }
         } else {
             args.extend([
                 "-c:v".into(), "libx264".into(),
@@ -463,6 +491,7 @@ pub async fn encode_video_with_progress(
 
         // ── AV1 single-pass path ──────────────────────────────────────────────────────
         if use_av1 {
+            let av1_enc = probe_av1_encoder(&ffmpeg);
             let av1_crf = 28u32;
             let maxrate = format!("{}k", (video_bitrate_kbps as f64 * 1.5) as u32);
             let bufsize = format!("{}k", video_bitrate_kbps * 3);
@@ -501,13 +530,28 @@ pub async fn encode_video_with_progress(
                 }
             }
 
+            if av1_enc == "libsvtav1" {
+                av1_args.extend([
+                    "-c:v".into(), "libsvtav1".into(),
+                    "-preset".into(), "6".into(),
+                    "-crf".into(), av1_crf.to_string(),
+                    "-maxrate".into(), maxrate,
+                    "-bufsize".into(), bufsize,
+                    "-svtav1-params".into(), "tune=0".into(),
+                ]);
+            } else {
+                // libaom-av1 fallback — no -preset, use -cpu-used
+                av1_args.extend([
+                    "-c:v".into(), "libaom-av1".into(),
+                    "-cpu-used".into(), "4".into(),
+                    "-crf".into(), av1_crf.to_string(),
+                    "-b:v".into(), "0".into(),
+                    "-maxrate".into(), maxrate,
+                    "-bufsize".into(), bufsize,
+                ]);
+            }
+
             av1_args.extend([
-                "-c:v".into(), "libsvtav1".into(),
-                "-preset".into(), "6".into(),
-                "-crf".into(), av1_crf.to_string(),
-                "-maxrate".into(), maxrate,
-                "-bufsize".into(), bufsize,
-                "-svtav1-params".into(), "tune=0".into(),
                 "-c:a".into(), "aac".into(),
                 "-b:a".into(), audio_ba,
                 "-progress".into(), "pipe:1".into(),
@@ -519,7 +563,7 @@ pub async fn encode_video_with_progress(
                 .args(&av1_args)
                 .no_window()
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped()) // capture stderr so we can report errors
+                .stderr(Stdio::piped())
                 .spawn().map_err(|e| e.to_string())?;
 
             let stdout  = child.stdout.take().unwrap();
@@ -550,19 +594,17 @@ pub async fn encode_video_with_progress(
 
             let status = child.wait().map_err(|e| e.to_string())?;
             if !status.success() {
-                // Try to collect stderr for a useful error message
                 return Err(format!(
-                    "FFmpeg AV1 encode failed (exit code {:?}). Make sure libsvtav1 is supported by your ffmpeg build.",
-                    status.code()
+                    "FFmpeg AV1 encode failed (exit code {:?}) using {}.",
+                    status.code(), av1_enc
                 ));
             }
 
-            // Verify the output file was actually written
             let out_size = std::fs::metadata(&output)
                 .map(|m| m.len())
                 .unwrap_or(0);
             if out_size == 0 {
-                return Err("AV1 encode produced an empty output file. libsvtav1 may not be available in your ffmpeg build.".into());
+                return Err(format!("AV1 encode ({av1_enc}) produced an empty output file."));
             }
 
             let _ = app.emit("encode-progress", EncodeProgress {
@@ -571,7 +613,7 @@ pub async fn encode_video_with_progress(
             return Ok("Done".into());
         }
 
-        // ── x264 2-pass path (original logic) ──────────────────────────────────────
+        // ── x264 2-pass path ──────────────────────────────────────────────────────
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 0.0, eta_secs: 0.0, pass: 1,
         });
@@ -711,7 +753,6 @@ pub async fn encode_video_with_progress(
         let status = child.wait().map_err(|e| e.to_string())?;
         if !status.success() { return Err("FFmpeg pass 2 failed".into()); }
 
-        // Verify the output file was actually written
         let out_size = std::fs::metadata(&output)
             .map(|m| m.len())
             .unwrap_or(0);
