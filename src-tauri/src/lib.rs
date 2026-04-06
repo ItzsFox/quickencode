@@ -9,6 +9,7 @@ pub fn run() {
             commands::get_video_frames,
             commands::get_encoded_frame,
             commands::encode_video_with_progress,
+            commands::cancel_encode,
             commands::scan_folder_for_videos,
             commands::get_file_size_mb,
             commands::show_in_folder,

@@ -1,6 +1,7 @@
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use tauri::Emitter;
 
@@ -8,6 +9,14 @@ use tauri::Emitter;
 use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+// ── Global cancel flag ─────────────────────────────────────────────────────────
+static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+pub fn cancel_encode() {
+    CANCEL_FLAG.store(true, Ordering::SeqCst);
+}
 
 trait NoWindow {
     fn no_window(&mut self) -> &mut Self;
@@ -448,6 +457,13 @@ pub async fn get_encoded_frame(
 
 // ── encode_video_with_progress ──────────────────────────────────────────────────────────────────
 
+/// Kill a child process and delete the (partial) output file.
+fn abort_child(mut child: std::process::Child, output: &str) {
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_file(output);
+}
+
 #[tauri::command]
 pub async fn encode_video_with_progress(
     app: tauri::AppHandle,
@@ -466,6 +482,9 @@ pub async fn encode_video_with_progress(
     use_av1: bool,
     use_gpu: bool,
 ) -> Result<String, String> {
+    // Reset cancel flag at the start of every new encode.
+    CANCEL_FLAG.store(false, Ordering::SeqCst);
+
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg      = resolve_bin(&app, "ffmpeg")?;
         let video_bv    = format!("{}k", video_bitrate_kbps);
@@ -543,7 +562,6 @@ pub async fn encode_video_with_progress(
             }
 
             if use_gpu {
-                // NVIDIA hardware AV1 encoder — supports -maxrate/-bufsize.
                 let maxrate = video_bv.clone();
                 let bufsize = video_bv.clone();
                 av1_args.extend([
@@ -557,10 +575,6 @@ pub async fn encode_video_with_progress(
             } else {
                 let av1_enc = probe_av1_encoder(&ffmpeg);
                 if av1_enc == "libsvtav1" {
-                    // SVT-AV1 does NOT support -maxrate/-bufsize.
-                    // Use VBR mode via -b:v only (no rate caps).
-                    // The bitrate calculation in the frontend already targets the
-                    // correct size, so this is sufficient for Discord Ready.
                     av1_args.extend([
                         "-c:v".into(), "libsvtav1".into(),
                         "-preset".into(), "6".into(),
@@ -568,7 +582,6 @@ pub async fn encode_video_with_progress(
                         "-svtav1-params".into(), "tune=0".into(),
                     ]);
                 } else {
-                    // libaom-av1 supports -maxrate/-bufsize in VBR mode.
                     let maxrate = video_bv.clone();
                     let bufsize = video_bv.clone();
                     av1_args.extend([
@@ -602,6 +615,11 @@ pub async fn encode_video_with_progress(
             let mut last_pct = 0.0f64;
 
             for line in reader.lines().flatten() {
+                // Check cancel flag on every progress line.
+                if CANCEL_FLAG.load(Ordering::SeqCst) {
+                    abort_child(child, &output);
+                    return Err("cancelled".into());
+                }
                 if let Some(rest) = line.strip_prefix("out_time_ms=") {
                     if let Ok(ms) = rest.trim().parse::<f64>() {
                         if ms <= 0.0 { continue; }
@@ -620,6 +638,12 @@ pub async fn encode_video_with_progress(
                         }
                     }
                 }
+            }
+
+            // Final cancel check after the reader loop drains.
+            if CANCEL_FLAG.load(Ordering::SeqCst) {
+                abort_child(child, &output);
+                return Err("cancelled".into());
             }
 
             let status = child.wait().map_err(|e| e.to_string())?;
@@ -680,6 +704,11 @@ pub async fn encode_video_with_progress(
         let start1  = std::time::Instant::now();
         let mut last_pct1 = 0.0f64;
         for line in reader1.lines().flatten() {
+            // Check cancel flag during pass 1.
+            if CANCEL_FLAG.load(Ordering::SeqCst) {
+                abort_child(child1, &output);
+                return Err("cancelled".into());
+            }
             if let Some(rest) = line.strip_prefix("out_time_ms=") {
                 if let Ok(ms) = rest.trim().parse::<f64>() {
                     if ms <= 0.0 { continue; }
@@ -699,6 +728,13 @@ pub async fn encode_video_with_progress(
                 }
             }
         }
+
+        // Final cancel check between pass 1 and pass 2.
+        if CANCEL_FLAG.load(Ordering::SeqCst) {
+            abort_child(child1, &output);
+            return Err("cancelled".into());
+        }
+
         let s1 = child1.wait().map_err(|e| e.to_string())?;
         if !s1.success() { return Err("FFmpeg pass 1 failed".into()); }
 
@@ -763,6 +799,11 @@ pub async fn encode_video_with_progress(
         let mut last_pct = 50.0f64;
 
         for line in reader.lines().flatten() {
+            // Check cancel flag during pass 2.
+            if CANCEL_FLAG.load(Ordering::SeqCst) {
+                abort_child(child, &output);
+                return Err("cancelled".into());
+            }
             if let Some(rest) = line.strip_prefix("out_time_ms=") {
                 if let Ok(ms) = rest.trim().parse::<f64>() {
                     if ms <= 0.0 { continue; }
@@ -782,6 +823,13 @@ pub async fn encode_video_with_progress(
                 }
             }
         }
+
+        // Final cancel check after the reader loop drains.
+        if CANCEL_FLAG.load(Ordering::SeqCst) {
+            abort_child(child, &output);
+            return Err("cancelled".into());
+        }
+
         let status = child.wait().map_err(|e| e.to_string())?;
         if !status.success() { return Err("FFmpeg pass 2 failed".into()); }
 

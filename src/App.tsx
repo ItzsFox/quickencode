@@ -249,6 +249,14 @@ function QualitySettings({ quality, resolution, format, audio, fps, useAv1, useG
 }
 
 // ─────────────────────────────────────────────────────────
+const CancelIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
+// ─────────────────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────────────────
 export default function App() {
@@ -285,6 +293,7 @@ export default function App() {
   const [useAv1, setUseAv1]         = useState(false);
   const [useGpu, setUseGpu]         = useState(false);
   const [encoding, setEncoding]     = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress]     = useState<EncodeProgress | null>(null);
   const [fsImage, setFsImage]       = useState<{src: string; label: string} | null>(null);
   const [status, setStatus]         = useState("");
@@ -451,6 +460,7 @@ export default function App() {
     const encodeWithAv1 = av1Override ?? useAv1;
     const encodeWithGpu = gpuOverride ?? useGpu;
     setEncoding(true);
+    setCancelling(false);
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     try {
       const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                  ? videoEdits.trimStart : null;
@@ -482,9 +492,15 @@ export default function App() {
       setDoneResult({ outputPath: out, originalMb: info.size_mb, finalMb });
       setScreen("done");
     } catch (e) {
-      setStatus(`❌ ${e}`);
+      const msg = String(e);
+      // "cancelled" is the sentinel returned by the Rust cancel path—
+      // silently dismiss the overlay instead of showing an error.
+      if (msg !== "cancelled") {
+        setStatus(`❌ ${msg}`);
+      }
     } finally {
       setEncoding(false);
+      setCancelling(false);
       setProgress(null);
     }
   };
@@ -500,6 +516,17 @@ export default function App() {
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
     runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, useAv1, useGpu);
+  };
+
+  /** Cancel the running encode. Sets a "cancelling" visual state while the
+   *  Rust side kills the ffmpeg process and returns. */
+  const handleCancelEncode = async () => {
+    setCancelling(true);
+    try {
+      await invoke("cancel_encode");
+    } catch {
+      // ignore — the encode may have already finished
+    }
   };
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
@@ -538,6 +565,16 @@ export default function App() {
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
         succeeded++;
       } catch (e) {
+        const msg = String(e);
+        if (msg === "cancelled") {
+          // User cancelled mid-batch: mark current file as error and stop the loop.
+          setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: "Cancelled" } : bf));
+          setBatchRunning(false);
+          setBatchProgress(null);
+          setCancelling(false);
+          setProgress(null);
+          return;
+        }
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: String(e) } : bf));
         failed++;
       }
@@ -570,7 +607,7 @@ export default function App() {
   const reset = () => {
     setScreen("drop"); setFilePath(""); setInfo(null);
     setOrigFrames([]); setEncFrames({}); setFrameIdx(0);
-    setStatus(""); setProgress(null); setEncoding(false);
+    setStatus(""); setProgress(null); setEncoding(false); setCancelling(false);
     setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
     setDoneResult(null); setBatchDoneResult(null);
     setVideoEdits(null); setShowEditor(false);
@@ -946,7 +983,7 @@ export default function App() {
         <div className="progress-overlay">
           <div className="progress-card">
             <div className="progress-title">
-              {progress.percent >= 100 ? "Done" : "Encoding…"}
+              {cancelling ? "Cancelling…" : progress.percent >= 100 ? "Done" : "Encoding…"}
             </div>
             {batchRunning && batchProgress && (
               <div className="progress-pass">
@@ -964,11 +1001,13 @@ export default function App() {
               <div className="progress-numbers">
                 <span className="progress-pct">{Math.round(progress.percent)}%</span>
                 <span>
-                  {progress.percent >= 100
-                    ? <span className="progress-done-msg">Complete</span>
-                    : progress.eta_secs > 0
-                      ? `ETA ${fmtEta(progress.eta_secs)}`
-                      : "Calculating…"}
+                  {cancelling
+                    ? <span className="progress-done-msg">Stopping…</span>
+                    : progress.percent >= 100
+                      ? <span className="progress-done-msg">Complete</span>
+                      : progress.eta_secs > 0
+                        ? `ETA ${fmtEta(progress.eta_secs)}`
+                        : "Calculating…"}
                 </span>
               </div>
             </div>
@@ -976,6 +1015,17 @@ export default function App() {
               <div className="progress-numbers" style={{ marginTop: -8 }}>
                 <span className="progress-file-label">Overall: {batchProgress.idx + 1} / {batchFiles.length}</span>
               </div>
+            )}
+            {/* Cancel button — hidden once cancelling is in progress */}
+            {!cancelling && (
+              <button
+                className="progress-cancel-btn"
+                onClick={handleCancelEncode}
+                aria-label="Cancel encode"
+              >
+                <CancelIcon />
+                Cancel
+              </button>
             )}
           </div>
         </div>
