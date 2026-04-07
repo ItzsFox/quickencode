@@ -1072,6 +1072,32 @@ select:focus { border-color: var(--text-dim); }
 .progress-done-msg { color: var(--success); font-weight: 700; }
 .progress-file-label { font-size: 10.5px; color: var(--text-dim); }
 
+/* ── Cancel button inside the progress overlay ── */
+.progress-cancel-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  background: none;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+  margin-top: -4px;
+}
+.progress-cancel-btn:hover {
+  border-color: var(--error);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 6%, transparent);
+}
+.progress-cancel-btn:active {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
 /* ══════════════════════════════════════════
    VIDEO EDITOR OVERLAY
    ══════════════════════════════════════════ */
