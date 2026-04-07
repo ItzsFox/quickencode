@@ -484,8 +484,8 @@ body {
 .batch-file-status.error  { color: var(--error); }
 .batch-file-status.active { color: var(--text-muted); }
 
-/* Edit button — mirrors the single-import Edit preset btn */
-.batch-file-edit {
+/* Edit button — matches the single-import Edit preset btn style */
+.batch-file-edit-btn {
   width: 24px;
   height: 24px;
   border: 1px solid var(--border-2);
@@ -500,19 +500,31 @@ body {
   flex-shrink: 0;
   padding: 0;
 }
-.batch-file-edit:hover:not(:disabled) {
+.batch-file-edit-btn:hover:not(:disabled) {
   color: var(--text);
   background: var(--surface-2);
   border-color: var(--text-dim);
 }
-.batch-file-edit:disabled { opacity: 0.28; cursor: not-allowed; }
+.batch-file-edit-btn:disabled { opacity: 0.28; cursor: not-allowed; }
 
-/* edited badge — small dot shown when a clip has custom edits */
-.batch-file-edited-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--text-muted);
+/* Spacer that holds the same 24px width when the edit btn is hidden (encoding) */
+.batch-file-edit-spacer {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: block;
+}
+
+/* Inline badge showing trim/audio edits for a clip */
+.batch-file-edits-badge {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
