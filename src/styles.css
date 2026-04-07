@@ -540,7 +540,9 @@ body {
   gap: 8px;
 }
 
-/* Actions row: +Add more on the left, presets + encode on the right */
+/* Actions row: +Add more on the left, presets + encode on the right.
+   Mirrors the single-import bottom-bar layout exactly:
+   [add-more]  [spacer flex:1]  [Discord Ready]  [Encode All] */
 .batch-actions {
   display: flex;
   align-items: center;
@@ -549,7 +551,7 @@ body {
 
 /* +Add more — ghost pill matching the preset-btn style */
 .batch-add-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 6px 13px;
@@ -564,6 +566,7 @@ body {
   transition: border-color 0.14s, color 0.14s, background 0.14s;
   white-space: nowrap;
   flex-shrink: 0;
+  line-height: 1;
 }
 .batch-add-btn:hover:not(:disabled) {
   border-color: var(--text-dim);
