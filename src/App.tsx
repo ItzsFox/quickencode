@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import VideoEditor from "./VideoEditor";
+import { VideoEdits } from "./types";
 
 interface VideoInfo {
   duration_secs: number;
@@ -27,6 +28,7 @@ interface BatchFile {
   path:   string;
   status: "pending" | "active" | "done" | "error";
   msg?:   string;
+  edits:  VideoEdits | null;
 }
 interface DoneResult {
   outputPath: string;
@@ -40,12 +42,8 @@ interface BatchDoneResult {
   outputDir: string;
 }
 
-/** State produced by the VideoEditor and consumed by runEncode */
-export interface VideoEdits {
-  trimStart:    number;   // seconds
-  trimEnd:      number;   // seconds
-  audioTracks:  { index: number; volume: number; deleted: boolean }[];
-}
+/** Re-export so App internal code can still use VideoEdits without importing types directly */
+export type { VideoEdits };
 
 const FRAME_COUNT    = 10;
 const DISCORD_TARGET = 9;
@@ -94,6 +92,17 @@ function isVideo(p: string) {
   return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
+/** Build a short badge string for a clip's edits, e.g. "0:12 · −1 audio" */
+function editsBadgeForClip(edits: VideoEdits | null, duration: number): string | null {
+  if (!edits) return null;
+  const parts: string[] = [];
+  if (edits.trimStart > 0 || edits.trimEnd < duration)
+    parts.push(fmtTime(edits.trimEnd - edits.trimStart));
+  const del = edits.audioTracks.filter(t => t.deleted).length;
+  if (del) parts.push(`−${del} audio`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 const QELogo = ({ size = 20 }: { size?: number }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 85 85" fill="currentColor" aria-label="quick encode logo" style={{ flexShrink: 0, display: "block" }}>
     <path d="M80 30C82.7614 30 85 32.2386 85 35V80C85 82.7614 82.7614 85 80 85H35C32.2386 85 30 82.7614 30 80V69H65C67.2091 69 69 67.2091 69 65V30H80ZM65 16C67.2091 16 69 17.7909 69 20V30H55V50C55 52.7614 52.7614 55 50 55H30V69H20C17.7909 69 16 67.2091 16 65V55H30V35C30 32.2386 32.2386 30 35 30H55V16H65ZM50 0C52.7614 0 55 2.23858 55 5V16H20C17.7909 16 16 17.7909 16 20V55H5C2.23858 55 0 52.7614 0 50V5C0 2.23858 2.23858 0 5 0H50Z" />
@@ -103,6 +112,14 @@ const QELogo = ({ size = 20 }: { size?: number }) => (
 const DiscordIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
     <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057.1 18.08.114 18.1.131 18.111a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+  </svg>
+);
+
+/** Pencil edit icon — matches the one used in the single-clip bottom bar */
+const EditIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
   </svg>
 );
 
@@ -299,7 +316,7 @@ export default function App() {
   const [status, setStatus]         = useState("");
   const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
 
-  // Video editor state
+  // Video editor state (single-clip)
   const [showEditor, setShowEditor] = useState(false);
   const [videoEdits, setVideoEdits] = useState<VideoEdits | null>(null);
 
@@ -307,6 +324,12 @@ export default function App() {
   const [batchProgress, setBatchProgress]     = useState<{idx: number; enc: EncodeProgress; currentFile: string} | null>(null);
   const [batchRunning, setBatchRunning]       = useState(false);
   const [batchDoneResult, setBatchDoneResult] = useState<BatchDoneResult | null>(null);
+
+  // Batch per-clip editor state
+  // editingBatchIdx: the index in batchFiles whose editor is open (-1 = none)
+  const [editingBatchIdx, setEditingBatchIdx] = useState<number>(-1);
+  // batchEditInfo: VideoInfo loaded on-demand for the clip being edited
+  const [batchEditInfo, setBatchEditInfo]     = useState<VideoInfo | null>(null);
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
@@ -421,7 +444,7 @@ export default function App() {
         if (resolved.length === 1) {
           loadFile(resolved[0]);
         } else {
-          setBatchFiles(resolved.map(p => ({ path: p, status: "pending" })));
+          setBatchFiles(resolved.map(p => ({ path: p, status: "pending", edits: null })));
           setScreen("batch");
         }
       }
@@ -446,7 +469,7 @@ export default function App() {
     const paths = Array.isArray(result) ? result : [result];
     if (paths.length === 0) return;
     if (paths.length === 1) { loadFile(paths[0]); return; }
-    setBatchFiles(paths.map(p => ({ path: p, status: "pending" as const })));
+    setBatchFiles(paths.map(p => ({ path: p, status: "pending" as const, edits: null })));
     setScreen("batch");
   };
 
@@ -493,8 +516,6 @@ export default function App() {
       setScreen("done");
     } catch (e) {
       const msg = String(e);
-      // "cancelled" is the sentinel returned by the Rust cancel path—
-      // silently dismiss the overlay instead of showing an error.
       if (msg !== "cancelled") {
         setStatus(`❌ ${msg}`);
       }
@@ -518,8 +539,6 @@ export default function App() {
     runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, useAv1, useGpu);
   };
 
-  /** Cancel the running encode. Sets a "cancelling" visual state while the
-   *  Rust side kills the ffmpeg process and returns. */
   const handleCancelEncode = async () => {
     setCancelling(true);
     try {
@@ -528,6 +547,36 @@ export default function App() {
       // ignore — the encode may have already finished
     }
   };
+
+  // ── Batch per-clip edit ──────────────────────────────────
+  /** Opens VideoEditor for the clip at `idx`. Loads the clip's VideoInfo first. */
+  const openBatchClipEditor = async (idx: number) => {
+    const file = batchFiles[idx];
+    if (!file) return;
+    try {
+      const clipInfo = await invoke<VideoInfo>("get_video_info", { input: file.path });
+      setBatchEditInfo(clipInfo);
+      setEditingBatchIdx(idx);
+    } catch (e) {
+      setStatus(`❌ Could not load clip info: ${e}`);
+    }
+  };
+
+  /** Called when the user confirms edits in the per-clip editor */
+  const saveBatchClipEdits = (edits: VideoEdits) => {
+    setBatchFiles(prev =>
+      prev.map((f, i) => i === editingBatchIdx ? { ...f, edits } : f)
+    );
+    setEditingBatchIdx(-1);
+    setBatchEditInfo(null);
+  };
+
+  /** Called when the user cancels in the per-clip editor */
+  const cancelBatchClipEditor = () => {
+    setEditingBatchIdx(-1);
+    setBatchEditInfo(null);
+  };
+  // ────────────────────────────────────────────────────────
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
     setBatchRunning(true);
@@ -544,20 +593,34 @@ export default function App() {
       const outFile = `${outputDir}/${inName}${suffix}.mp4`;
       try {
         const infoRaw = await invoke<VideoInfo>("get_video_info", { input: file.path });
+        const clipEdits = file.edits;
         let vbr: number, abr: number, res: string, f: string;
         if (discordMode) {
-          vbr = discordBr(infoRaw.duration_secs); abr = DISCORD_AUDIO; res = resolution; f = fps;
+          const effectiveDur = clipEdits
+            ? clipEdits.trimEnd - clipEdits.trimStart
+            : infoRaw.duration_secs;
+          vbr = discordBr(effectiveDur); abr = DISCORD_AUDIO; res = resolution; f = fps;
         } else {
           const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
           vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
         }
+        const trimStartArg   = clipEdits && clipEdits.trimStart > 0                      ? clipEdits.trimStart : null;
+        const trimEndArg     = clipEdits && clipEdits.trimEnd < infoRaw.duration_secs     ? clipEdits.trimEnd   : null;
+        const deletedTracks  = clipEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
+        const volumeMap      = clipEdits?.audioTracks
+          .filter(t => !t.deleted && t.volume !== 100)
+          .reduce<Record<number, number>>((acc, t) => { acc[t.index] = t.volume; return acc; }, {}) ?? {};
+        const durationSecs   = clipEdits ? (clipEdits.trimEnd - clipEdits.trimStart) : infoRaw.duration_secs;
+
         await invoke("encode_video_with_progress", {
           input: file.path, output: outFile,
           resolution: res, videoBitrateKbps: vbr,
           audioBitrateKbps: abr, fps: f,
-          durationSecs: infoRaw.duration_secs,
-          trimStart: null, trimEnd: null,
-          deletedTracks: [], volumeMap: {},
+          durationSecs,
+          trimStart:        trimStartArg,
+          trimEnd:          trimEndArg,
+          deletedTracks,
+          volumeMap,
           totalAudioTracks: infoRaw.audio_tracks?.length ?? 1,
           useAv1,
           useGpu,
@@ -567,7 +630,6 @@ export default function App() {
       } catch (e) {
         const msg = String(e);
         if (msg === "cancelled") {
-          // User cancelled mid-batch: mark current file as error and stop the loop.
           setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: "Cancelled" } : bf));
           setBatchRunning(false);
           setBatchProgress(null);
@@ -601,7 +663,7 @@ export default function App() {
       filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"] }],
     }) as string[] | null;
     if (!result?.length) return;
-    setBatchFiles(prev => [...prev, ...result.map(p => ({ path: p, status: "pending" as const }))]);
+    setBatchFiles(prev => [...prev, ...result.map(p => ({ path: p, status: "pending" as const, edits: null }))]);
   };
 
   const reset = () => {
@@ -611,6 +673,7 @@ export default function App() {
     setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
     setDoneResult(null); setBatchDoneResult(null);
     setVideoEdits(null); setShowEditor(false);
+    setEditingBatchIdx(-1); setBatchEditInfo(null);
   };
 
   const currentOrig = origFrames[frameIdx];
@@ -643,7 +706,22 @@ export default function App() {
   return (
     <div className="app">
 
-      {/* ── VIDEO EDITOR OVERLAY ── */}
+      {/* ── BATCH PER-CLIP EDITOR OVERLAY ── */}
+      {editingBatchIdx >= 0 && batchEditInfo && (() => {
+        const clipFile = batchFiles[editingBatchIdx];
+        return (
+          <VideoEditor
+            filePath={clipFile.path}
+            info={batchEditInfo}
+            theme={theme}
+            initialEdits={clipFile.edits}
+            onConfirm={saveBatchClipEdits}
+            onCancel={cancelBatchClipEditor}
+          />
+        );
+      })()}
+
+      {/* ── VIDEO EDITOR OVERLAY (single-clip) ── */}
       {showEditor && filePath && info && (
         <VideoEditor
           filePath={filePath}
@@ -803,21 +881,38 @@ export default function App() {
           </div>
 
           <div className="batch-file-list">
-            {batchFiles.map((f, i) => (
-              <div key={f.path} className="batch-file-row">
-                <span className="batch-file-icon">&#9654;</span>
-                <span className="batch-file-name" title={f.path}>{basename(f.path)}</span>
-                <span className={`batch-file-status ${f.status}`}>
-                  {f.status === "pending" ? "Pending"
-                    : f.status === "active" ? "Encoding…"
-                    : f.status === "done"   ? "✓ Done"
-                    : "✕ Error"}
-                </span>
-                {!batchRunning && f.status !== "active" && (
-                  <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>&times;</button>
-                )}
-              </div>
-            ))}
+            {batchFiles.map((f, i) => {
+              const badge = editsBadgeForClip(f.edits, 0 /* duration unknown until loaded — badge already set */);
+              return (
+                <div key={f.path} className="batch-file-row">
+                  {/* Edit button — replaces the old decorative play icon */}
+                  {!batchRunning && f.status !== "active" ? (
+                    <button
+                      className="batch-file-edit-btn"
+                      onClick={() => openBatchClipEditor(i)}
+                      title="Edit this clip"
+                      aria-label="Edit clip"
+                    >
+                      <EditIcon />
+                    </button>
+                  ) : (
+                    // While running / active just show a neutral spacer so layout stays stable
+                    <span className="batch-file-edit-spacer" aria-hidden="true" />
+                  )}
+                  <span className="batch-file-name" title={f.path}>{basename(f.path)}</span>
+                  {badge && <span className="batch-file-edits-badge">{badge}</span>}
+                  <span className={`batch-file-status ${f.status}`}>
+                    {f.status === "pending" ? "Pending"
+                      : f.status === "active" ? "Encoding…"
+                      : f.status === "done"   ? "✓ Done"
+                      : "✕ Error"}
+                  </span>
+                  {!batchRunning && f.status !== "active" && (
+                    <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>&times;</button>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div className="batch-bottom">
@@ -1016,7 +1111,6 @@ export default function App() {
                 <span className="progress-file-label">Overall: {batchProgress.idx + 1} / {batchFiles.length}</span>
               </div>
             )}
-            {/* Cancel button — hidden once cancelling is in progress */}
             {!cancelling && (
               <button
                 className="progress-cancel-btn"
