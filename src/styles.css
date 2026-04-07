@@ -464,11 +464,6 @@ body {
   transition: border-color 0.14s;
 }
 .batch-file-row:hover { border-color: var(--border-2); }
-.batch-file-icon {
-  font-size: 11px;
-  flex-shrink: 0;
-  color: var(--text-dim);
-}
 .batch-file-name {
   flex: 1;
   font-size: 12px;
@@ -488,6 +483,39 @@ body {
 .batch-file-status.done   { color: var(--success); }
 .batch-file-status.error  { color: var(--error); }
 .batch-file-status.active { color: var(--text-muted); }
+
+/* Edit button — mirrors the single-import Edit preset btn */
+.batch-file-edit {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-2);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: color 0.14s, background 0.14s, border-color 0.14s;
+  flex-shrink: 0;
+  padding: 0;
+}
+.batch-file-edit:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--text-dim);
+}
+.batch-file-edit:disabled { opacity: 0.28; cursor: not-allowed; }
+
+/* edited badge — small dot shown when a clip has custom edits */
+.batch-file-edited-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
 .batch-file-remove {
   width: 18px;
   height: 18px;
@@ -504,6 +532,45 @@ body {
   flex-shrink: 0;
 }
 .batch-file-remove:hover { color: var(--text-dim); background: var(--surface-2); }
+
+/* ── Batch bottom area ── */
+.batch-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Actions row: +Add more on the left, presets + encode on the right */
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* +Add more — ghost pill matching the preset-btn style */
+.batch-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 13px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.batch-add-btn:hover:not(:disabled) {
+  border-color: var(--text-dim);
+  color: var(--text);
+  background: var(--surface-2);
+}
+.batch-add-btn:disabled { opacity: 0.28; cursor: not-allowed; }
 
 /* ══════════════════════════════════════════
    MAIN EDITOR
