@@ -927,10 +927,10 @@ export default function App() {
             <div className="batch-actions">
               <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>+ Add more</button>
               <div style={{ flex: 1 }} />
-              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤9 MB for Discord">
+              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤10 MB for Discord">
                 <DiscordIcon />
                 Discord Ready
-                <span className="preset-size">≤9 MB each</span>
+                <span className="preset-size">≤10 MB each</span>
               </button>
               <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
                 {batchRunning
