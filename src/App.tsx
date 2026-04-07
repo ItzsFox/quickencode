@@ -65,7 +65,7 @@ function fmtMb(mb: number) {
   return mb >= 1024 ? `${(mb/1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
 }
 function fmtEta(s: number) {
-  if (s <= 0) return "—";
+  if (s <= 0) return "\u2014";
   if (s < 60) return `${Math.ceil(s)}s`;
   return `${Math.floor(s/60)}m ${Math.ceil(s%60)}s`;
 }
@@ -92,15 +92,15 @@ function isVideo(p: string) {
   return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
-/** Build a short badge string for a clip's edits, e.g. "0:12 · −1 audio" */
+/** Build a short badge string for a clip's edits, e.g. "0:12 \u00b7 \u22121 audio" */
 function editsBadgeForClip(edits: VideoEdits | null, duration: number): string | null {
   if (!edits) return null;
   const parts: string[] = [];
   if (edits.trimStart > 0 || edits.trimEnd < duration)
     parts.push(fmtTime(edits.trimEnd - edits.trimStart));
   const del = edits.audioTracks.filter(t => t.deleted).length;
-  if (del) parts.push(`−${del} audio`);
-  return parts.length > 0 ? parts.join(" · ") : null;
+  if (del) parts.push(`\u2212${del} audio`);
+  return parts.length > 0 ? parts.join(" \u00b7 ") : null;
 }
 
 const QELogo = ({ size = 20 }: { size?: number }) => (
@@ -115,7 +115,7 @@ const DiscordIcon = () => (
   </svg>
 );
 
-/** Pencil edit icon — matches the one used in the single-clip bottom bar */
+/** Pencil edit icon \u2014 matches the one used in the single-clip bottom bar */
 const EditIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -125,7 +125,7 @@ const EditIcon = () => (
 
 type Screen = "drop" | "loading" | "editor" | "batch" | "done" | "batch-done";
 
-// ── Sub-components lifted outside App to prevent remount on every render ──
+// \u2500\u2500 Sub-components lifted outside App to prevent remount on every render \u2500\u2500
 
 interface WordmarkProps { size?: "sm" | "base"; }
 function Wordmark({ size = "base" }: WordmarkProps) {
@@ -232,7 +232,7 @@ function QualitySettings({ quality, resolution, format, audio, fps, useAv1, useG
           </div>
         </div>
         <div className="av1-toggle-row">
-          <label className="av1-toggle" htmlFor="av1-checkbox">
+          <label className="av1-toggle" htmlFor="av1-checkbox" title="Uses SVT-AV1 encoder \u2014 better quality at the same file size, but slower to encode than H.264">
             <input
               id="av1-checkbox"
               type="checkbox"
@@ -247,7 +247,7 @@ function QualitySettings({ quality, resolution, format, audio, fps, useAv1, useG
             {!useAv1 && <span className="av1-hint">better quality, longer encode</span>}
           </label>
           {useAv1 && (
-            <label className="av1-toggle gpu-toggle" htmlFor="gpu-checkbox" title="Uses NVIDIA av1_nvenc — much faster, requires RTX 40-series GPU">
+            <label className="av1-toggle gpu-toggle" htmlFor="gpu-checkbox" title="Uses NVIDIA av1_nvenc \u2014 much faster, requires RTX 40-series GPU">
               <input
                 id="gpu-checkbox"
                 type="checkbox"
@@ -265,7 +265,7 @@ function QualitySettings({ quality, resolution, format, audio, fps, useAv1, useG
   );
 }
 
-// ─────────────────────────────────────────────────────────
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const CancelIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <line x1="18" y1="6" x2="6" y2="18" />
@@ -273,9 +273,9 @@ const CancelIcon = () => (
   </svg>
 );
 
-// ─────────────────────────────────────────────────────────
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 // MAIN APP
-// ─────────────────────────────────────────────────────────
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 export default function App() {
   const initTheme = (): "light" | "dark" => {
     try { return (localStorage.getItem("qe_theme") as "light" | "dark") ?? "light"; }
@@ -405,7 +405,7 @@ export default function App() {
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
       loadEncodedFrame(0, vbr, resolution, fps, useAv1, useGpu);
     } catch (e) {
-      setStatus(`❌ ${e}`);
+      setStatus(`\u274c ${e}`);
       setScreen("drop");
     }
   }, [resolution, quality, fps, useAv1, useGpu, loadEncodedFrame]);
@@ -517,7 +517,7 @@ export default function App() {
     } catch (e) {
       const msg = String(e);
       if (msg !== "cancelled") {
-        setStatus(`❌ ${msg}`);
+        setStatus(`\u274c ${msg}`);
       }
     } finally {
       setEncoding(false);
@@ -544,11 +544,11 @@ export default function App() {
     try {
       await invoke("cancel_encode");
     } catch {
-      // ignore — the encode may have already finished
+      // ignore \u2014 the encode may have already finished
     }
   };
 
-  // ── Batch per-clip edit ──────────────────────────────────
+  // \u2500\u2500 Batch per-clip edit \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /** Opens VideoEditor for the clip at `idx`. Loads the clip's VideoInfo first. */
   const openBatchClipEditor = async (idx: number) => {
     const file = batchFiles[idx];
@@ -558,7 +558,7 @@ export default function App() {
       setBatchEditInfo(clipInfo);
       setEditingBatchIdx(idx);
     } catch (e) {
-      setStatus(`❌ Could not load clip info: ${e}`);
+      setStatus(`\u274c Could not load clip info: ${e}`);
     }
   };
 
@@ -576,7 +576,7 @@ export default function App() {
     setEditingBatchIdx(-1);
     setBatchEditInfo(null);
   };
-  // ────────────────────────────────────────────────────────
+  // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
     setBatchRunning(true);
@@ -686,8 +686,8 @@ export default function App() {
         if (videoEdits.trimStart > 0 || (info && videoEdits.trimEnd < info.duration_secs))
           parts.push(fmtTime(videoEdits.trimEnd - videoEdits.trimStart));
         const del = videoEdits.audioTracks.filter(t => t.deleted).length;
-        if (del) parts.push(`−${del} audio`);
-        return parts.join(" · ");
+        if (del) parts.push(`\u2212${del} audio`);
+        return parts.join(" \u00b7 ");
       })()
     : null;
 
@@ -696,17 +696,17 @@ export default function App() {
     if (!progress) return "";
     if (progress.percent >= 100) return "Finalizing";
     if (useAv1) {
-      const enc = useGpu ? "GPU · av1_nvenc" : "CPU · SVT-AV1";
-      return `Pass 1 / 1 — ${enc}`;
+      const enc = useGpu ? "GPU \u00b7 av1_nvenc" : "CPU \u00b7 SVT-AV1";
+      return `Pass 1 / 1 \u2014 ${enc}`;
     }
-    if (progress.pass === 1) return "Pass 1 / 2 — Analyzing";
-    return "Pass 2 / 2 — Encoding";
+    if (progress.pass === 1) return "Pass 1 / 2 \u2014 Analyzing";
+    return "Pass 2 / 2 \u2014 Encoding";
   })();
 
   return (
     <div className="app">
 
-      {/* ── BATCH PER-CLIP EDITOR OVERLAY ── */}
+      {/* \u2500\u2500 BATCH PER-CLIP EDITOR OVERLAY \u2500\u2500 */}
       {editingBatchIdx >= 0 && batchEditInfo && (() => {
         const clipFile = batchFiles[editingBatchIdx];
         return (
@@ -721,7 +721,7 @@ export default function App() {
         );
       })()}
 
-      {/* ── VIDEO EDITOR OVERLAY (single-clip) ── */}
+      {/* \u2500\u2500 VIDEO EDITOR OVERLAY (single-clip) \u2500\u2500 */}
       {showEditor && filePath && info && (
         <VideoEditor
           filePath={filePath}
@@ -736,7 +736,7 @@ export default function App() {
         />
       )}
 
-      {/* ── DROP ── */}
+      {/* \u2500\u2500 DROP \u2500\u2500 */}
       {screen === "drop" && (
         <div className={`drop-screen${dragOver ? " drag-over" : ""}`} onClick={pickFiles}>
           <div className="drop-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
@@ -747,7 +747,7 @@ export default function App() {
           </div>
           <div className="drop-hint-text">
             <p>{dragOver ? "Drop to load" : "Drop files or folders here, or"}</p>
-            <small>MP4 · MKV · AVI · MOV · WebM · M4V · select multiple for batch</small>
+            <small>MP4 \u00b7 MKV \u00b7 AVI \u00b7 MOV \u00b7 WebM \u00b7 M4V \u00b7 select multiple for batch</small>
           </div>
           <div className="drop-actions">
             <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFiles(); }}>Browse files</button>
@@ -756,7 +756,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── LOADING ── */}
+      {/* \u2500\u2500 LOADING \u2500\u2500 */}
       {screen === "loading" && (
         <div className="loading-screen">
           <div className="loading-content">
@@ -772,7 +772,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── DONE (single) ── */}
+      {/* \u2500\u2500 DONE (single) \u2500\u2500 */}
       {screen === "done" && doneResult && (() => {
         const { outputPath, originalMb, finalMb } = doneResult;
         const saved = Math.round((1 - finalMb / originalMb) * 100);
@@ -820,7 +820,7 @@ export default function App() {
         );
       })()}
 
-      {/* ── BATCH DONE ── */}
+      {/* \u2500\u2500 BATCH DONE \u2500\u2500 */}
       {screen === "batch-done" && batchDoneResult && (
         <div className="done-screen">
           <div className="done-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
@@ -865,7 +865,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── BATCH SCREEN ── */}
+      {/* \u2500\u2500 BATCH SCREEN \u2500\u2500 */}
       {screen === "batch" && (
         <div className="batch-screen">
           <div className="batch-topbar">
@@ -882,10 +882,10 @@ export default function App() {
 
           <div className="batch-file-list">
             {batchFiles.map((f, i) => {
-              const badge = editsBadgeForClip(f.edits, 0 /* duration unknown until loaded — badge already set */);
+              const badge = editsBadgeForClip(f.edits, 0 /* duration unknown until loaded \u2014 badge already set */);
               return (
                 <div key={f.path} className="batch-file-row">
-                  {/* Edit button — replaces the old decorative play icon */}
+                  {/* Edit button \u2014 replaces the old decorative play icon */}
                   {!batchRunning && f.status !== "active" ? (
                     <button
                       className="batch-file-edit-btn"
@@ -903,9 +903,9 @@ export default function App() {
                   {badge && <span className="batch-file-edits-badge">{badge}</span>}
                   <span className={`batch-file-status ${f.status}`}>
                     {f.status === "pending" ? "Pending"
-                      : f.status === "active" ? "Encoding…"
-                      : f.status === "done"   ? "✓ Done"
-                      : "✕ Error"}
+                      : f.status === "active" ? "Encoding\u2026"
+                      : f.status === "done"   ? "\u2713 Done"
+                      : "\u2715 Error"}
                   </span>
                   {!batchRunning && f.status !== "active" && (
                     <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>&times;</button>
@@ -927,14 +927,14 @@ export default function App() {
             <div className="batch-actions">
               <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>+ Add more</button>
               <div style={{ flex: 1 }} />
-              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤10 MB for Discord">
+              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting \u226410 MB for Discord">
                 <DiscordIcon />
                 Discord Ready
-                <span className="preset-size">≤10 MB each</span>
+                <span className="preset-size">\u226410 MB each</span>
               </button>
               <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
                 {batchRunning
-                  ? <span className="btn-inner"><div className="spin" />Encoding…</span>
+                  ? <span className="btn-inner"><div className="spin" />Encoding\u2026</span>
                   : `Encode All (${batchFiles.length})`}
               </button>
             </div>
@@ -943,7 +943,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── EDITOR ── */}
+      {/* \u2500\u2500 EDITOR \u2500\u2500 */}
       {screen === "editor" && info && (
         <div className="editor">
           <div className="topbar">
@@ -1009,7 +1009,7 @@ export default function App() {
                   )}
                   <span className="preview-tag">
                     Output
-                    {useAv1 && <span className="preview-tag-av1">{useGpu ? "AV1·GPU" : "AV1"}</span>}
+                    {useAv1 && <span className="preview-tag-av1">{useGpu ? "AV1\u00b7GPU" : "AV1"}</span>}
                   </span>
                   {currentEnc && !encLoading && (
                     <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>&#x26F6;</button>
@@ -1017,14 +1017,14 @@ export default function App() {
                 </div>
               </div>
               <div className="frame-nav">
-                <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
+                <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>\u2039</button>
                 <div className="frame-dots">
                   {Array.from({ length: FRAME_COUNT }, (_, i) => (
                     <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} />
                   ))}
                 </div>
-                <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
-                <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
+                <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>\u203a</button>
+                <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} \u00b7 {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
               </div>
             </div>
           </div>
@@ -1040,9 +1040,9 @@ export default function App() {
 
           <div className="bottom-bar">
             <div className="est-inline">
-              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
+              <span className="est-val">{fmtMb(estLow)} \u2013 {fmtMb(estHigh)}</span>
               {reduction !== 0 && (
-                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
+                <span className="est-diff">{reduction > 0 ? `\u2212${reduction}%` : `+${Math.abs(reduction)}%`}</span>
               )}
             </div>
             <button
@@ -1059,13 +1059,13 @@ export default function App() {
               {editsBadge && <span className="preset-size">{editsBadge}</span>}
             </button>
             <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title={`Targets ${DISCORD_TARGET} MB — ${discordBr(info.duration_secs)} kbps video, ${DISCORD_AUDIO} kbps audio`}>
+              title="Encode targeting \u226410 MB for Discord">
               <DiscordIcon />
               Discord Ready
-              <span className="preset-size">≤10 MB</span>
+              <span className="preset-size">\u226410 MB</span>
             </button>
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
-              {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
+              {encoding ? <span className="btn-inner"><div className="spin" />Encoding\u2026</span> : "Start Encode"}
             </button>
           </div>
 
@@ -1073,16 +1073,16 @@ export default function App() {
         </div>
       )}
 
-      {/* ── PROGRESS OVERLAY ── */}
+      {/* \u2500\u2500 PROGRESS OVERLAY \u2500\u2500 */}
       {(encoding || batchRunning) && progress && (
         <div className="progress-overlay">
           <div className="progress-card">
             <div className="progress-title">
-              {cancelling ? "Cancelling…" : progress.percent >= 100 ? "Done" : "Encoding…"}
+              {cancelling ? "Cancelling\u2026" : progress.percent >= 100 ? "Done" : "Encoding\u2026"}
             </div>
             {batchRunning && batchProgress && (
               <div className="progress-pass">
-                File {batchProgress.idx + 1} / {batchFiles.length} — {batchProgress.currentFile}
+                File {batchProgress.idx + 1} / {batchFiles.length} \u2014 {batchProgress.currentFile}
               </div>
             )}
             <div className="progress-pass">{passLabel}</div>
@@ -1097,12 +1097,12 @@ export default function App() {
                 <span className="progress-pct">{Math.round(progress.percent)}%</span>
                 <span>
                   {cancelling
-                    ? <span className="progress-done-msg">Stopping…</span>
+                    ? <span className="progress-done-msg">Stopping\u2026</span>
                     : progress.percent >= 100
                       ? <span className="progress-done-msg">Complete</span>
                       : progress.eta_secs > 0
                         ? `ETA ${fmtEta(progress.eta_secs)}`
-                        : "Calculating…"}
+                        : "Calculating\u2026"}
                 </span>
               </div>
             </div>
@@ -1125,7 +1125,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── FULLSCREEN ── */}
+      {/* \u2500\u2500 FULLSCREEN \u2500\u2500 */}
       {fsImage && (
         <div className="fullscreen-overlay" onClick={() => setFsImage(null)}>
           <span className="fullscreen-label">{fsImage.label}</span>
