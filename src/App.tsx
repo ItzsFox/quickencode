@@ -92,7 +92,7 @@ function isVideo(p: string) {
   return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
-/** Build a short badge string for a clip's edits, e.g. "0:12 · −1 audio" */
+/** Build a short badge string for a clip's edits, e.g. "0:12 · −1 audio · merged" */
 function editsBadgeForClip(edits: VideoEdits | null, duration: number): string | null {
   if (!edits) return null;
   const parts: string[] = [];
@@ -100,6 +100,8 @@ function editsBadgeForClip(edits: VideoEdits | null, duration: number): string |
     parts.push(fmtTime(edits.trimEnd - edits.trimStart));
   const del = edits.audioTracks.filter(t => t.deleted).length;
   if (del) parts.push(`−${del} audio`);
+  const activeTracks = edits.audioTracks.filter(t => !t.deleted).length;
+  if (edits.mergeAudioTracks && activeTracks > 1) parts.push("merged");
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
@@ -492,7 +494,8 @@ export default function App() {
       const volumeMap      = videoEdits?.audioTracks
         .filter(t => !t.deleted && t.volume !== 100)
         .reduce<Record<number, number>>((acc, t) => { acc[t.index] = t.volume; return acc; }, {}) ?? {};
-      const totalAudioTracks = info.audio_tracks?.length ?? 1;
+      const totalAudioTracks  = info.audio_tracks?.length ?? 1;
+      const mergeAudioTracks  = videoEdits?.mergeAudioTracks ?? false;
 
       await invoke("encode_video_with_progress", {
         input:            filePath,
@@ -507,6 +510,7 @@ export default function App() {
         deletedTracks,
         volumeMap,
         totalAudioTracks,
+        mergeAudioTracks,
         useAv1:           encodeWithAv1,
         useGpu:           encodeWithGpu,
       });
@@ -604,13 +608,14 @@ export default function App() {
           const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
           vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
         }
-        const trimStartArg   = clipEdits && clipEdits.trimStart > 0                      ? clipEdits.trimStart : null;
-        const trimEndArg     = clipEdits && clipEdits.trimEnd < infoRaw.duration_secs     ? clipEdits.trimEnd   : null;
-        const deletedTracks  = clipEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
-        const volumeMap      = clipEdits?.audioTracks
+        const trimStartArg      = clipEdits && clipEdits.trimStart > 0                      ? clipEdits.trimStart : null;
+        const trimEndArg        = clipEdits && clipEdits.trimEnd < infoRaw.duration_secs     ? clipEdits.trimEnd   : null;
+        const deletedTracks     = clipEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
+        const volumeMap         = clipEdits?.audioTracks
           .filter(t => !t.deleted && t.volume !== 100)
           .reduce<Record<number, number>>((acc, t) => { acc[t.index] = t.volume; return acc; }, {}) ?? {};
-        const durationSecs   = clipEdits ? (clipEdits.trimEnd - clipEdits.trimStart) : infoRaw.duration_secs;
+        const durationSecs      = clipEdits ? (clipEdits.trimEnd - clipEdits.trimStart) : infoRaw.duration_secs;
+        const mergeAudioTracks  = clipEdits?.mergeAudioTracks ?? false;
 
         await invoke("encode_video_with_progress", {
           input: file.path, output: outFile,
@@ -622,6 +627,7 @@ export default function App() {
           deletedTracks,
           volumeMap,
           totalAudioTracks: infoRaw.audio_tracks?.length ?? 1,
+          mergeAudioTracks,
           useAv1,
           useGpu,
         });
@@ -687,6 +693,8 @@ export default function App() {
           parts.push(fmtTime(videoEdits.trimEnd - videoEdits.trimStart));
         const del = videoEdits.audioTracks.filter(t => t.deleted).length;
         if (del) parts.push(`−${del} audio`);
+        const activeTracks = videoEdits.audioTracks.filter(t => !t.deleted).length;
+        if (videoEdits.mergeAudioTracks && activeTracks > 1) parts.push("merged");
         return parts.join(" · ");
       })()
     : null;
