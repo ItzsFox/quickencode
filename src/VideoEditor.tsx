@@ -62,6 +62,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
   const [videoReady,     setVideoReady]     = useState(false);
   const [soloIdx,        setSoloIdx]        = useState(0);
   const [switchingTrack, setSwitchingTrack] = useState(false);
+  const [mergeAudio,     setMergeAudio]     = useState(() => initialEdits?.mergeAudioTracks ?? false);
 
   const trimStartRef = useRef(trimStart);
   const trimEndRef   = useRef(trimEnd);
@@ -295,12 +296,16 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
     trimStart,
     trimEnd,
     audioTracks: tracks.map(t => ({ index: t.index, volume: t.volume, deleted: t.deleted })),
+    mergeAudioTracks: mergeAudio,
   });
 
   const playPct  = duration > 0 ? (currentTime / duration) * 100 : 0;
   const startPct = duration > 0 ? (trimStart   / duration) * 100 : 0;
   const endPct   = duration > 0 ? (trimEnd     / duration) * 100 : 100;
   const clipLen  = trimEnd - trimStart;
+
+  // Count active (non-deleted) tracks to decide checkbox visibility
+  const activeTrackCount = tracks.filter(t => !t.deleted).length;
 
   return (
     <div className="veditor-overlay">
@@ -390,9 +395,22 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
         <div className="veditor-audio">
           <div className="veditor-audio-header">
             <span className="veditor-section-label">Audio Tracks</span>
-            {multiTrack && (
-              <span className="veditor-solo-hint">Click a track to solo-preview its audio</span>
-            )}
+            <div className="veditor-audio-header-right">
+              {multiTrack && (
+                <span className="veditor-solo-hint">Click a track to solo-preview its audio</span>
+              )}
+              {multiTrack && activeTrackCount > 1 && (
+                <label className="veditor-merge-label" htmlFor="veditor-merge-cb" title="Mix all active audio tracks into a single output stream">
+                  <input
+                    id="veditor-merge-cb"
+                    type="checkbox"
+                    checked={mergeAudio}
+                    onChange={e => setMergeAudio(e.target.checked)}
+                  />
+                  Merge tracks
+                </label>
+              )}
+            </div>
           </div>
           {tracks.map((t, i) => {
             const isSolo = i === soloIdx && !t.deleted;
@@ -479,6 +497,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
           {tracks.some(t => t.deleted) &&
             ` · ${tracks.filter(t => t.deleted).length} track${tracks.filter(t => t.deleted).length > 1 ? "s" : ""} removed`
           }
+          {mergeAudio && activeTrackCount > 1 && " · merged"}
         </span>
         <button className="veditor-cancel" onClick={onCancel}>Cancel</button>
         <button className="veditor-confirm" onClick={confirm}>Confirm &amp; Back</button>
