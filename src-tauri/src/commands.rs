@@ -464,6 +464,113 @@ fn abort_child(mut child: std::process::Child, output: &str) {
     let _ = std::fs::remove_file(output);
 }
 
+/// Build the audio portion of an ffmpeg argument list.
+///
+/// * `active_audio`      — list of audio stream indices that are NOT deleted
+/// * `volume_map`        — per-index volume overrides (100 = no change)
+/// * `merge_audio_tracks`— when true AND multiple active tracks exist, mix them
+///                         into a single output stream via amix
+///
+/// Returns `(extra_args, used_filter_complex)`.
+/// When `used_filter_complex` is true the caller must NOT add a second
+/// `-filter_complex` flag; the vf scale/fps filter has already been
+/// folded in via the `vf_arg` parameter.
+fn build_audio_args(
+    active_audio:       &[usize],
+    volume_map:         &HashMap<usize, u32>,
+    merge_audio_tracks: bool,
+    vf_arg:             &[String],   // existing video filter args (may be empty)
+) -> (Vec<String>, bool) {
+    // ── Merge path ───────────────────────────────────────────────────────────
+    // Use amix when merging is requested AND there are at least 2 active tracks.
+    if merge_audio_tracks && active_audio.len() > 1 {
+        // Build a single filter_complex that:
+        //   1. Optionally applies per-track volume adjustments.
+        //   2. Feeds all tracks into amix → [aout].
+        //   3. Folds in any video scale/fps filter (vf_arg) so we only need
+        //      one -filter_complex flag total.
+        let n = active_audio.len();
+        let mut filter_parts: Vec<String> = vec![];
+
+        // Per-track volume → labelled outputs [v0],[v1],…
+        let mut amix_inputs = String::new();
+        for (out_idx, &ai) in active_audio.iter().enumerate() {
+            let vol_pct = volume_map.get(&ai).copied().unwrap_or(100);
+            let vol_f   = vol_pct as f64 / 100.0;
+            if (vol_pct - 100).unsigned_abs() > 0 {
+                let label = format!("av{out_idx}");
+                filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
+                amix_inputs.push_str(&format!("[{label}]"));
+            } else {
+                amix_inputs.push_str(&format!("[0:a:{ai}]"));
+            }
+        }
+
+        // amix: inputs=N, normalize=0 keeps loudness additive (same as before)
+        filter_parts.push(format!("{amix_inputs}amix=inputs={n}:normalize=0[aout]"));
+
+        // Fold video filters in if present
+        if !vf_arg.is_empty() {
+            // vf_arg is ["-vf", "scale=…,fps=…"]; extract the filter string
+            if let Some(vf_str) = vf_arg.get(1) {
+                filter_parts.push(format!("[0:v:0]{vf_str}[vout]"));
+            }
+        }
+
+        let mut args: Vec<String> = vec![
+            "-filter_complex".into(),
+            filter_parts.join(";"),
+        ];
+
+        // Map video
+        if !vf_arg.is_empty() {
+            args.extend(["-map".into(), "[vout]".into()]);
+        } else {
+            args.extend(["-map".into(), "0:v:0".into()]);
+        }
+
+        // Map merged audio
+        args.extend(["-map".into(), "[aout]".into()]);
+
+        return (args, true);
+    }
+
+    // ── Normal path (no merge) ───────────────────────────────────────────────
+    let has_volume_changes = active_audio.iter().any(|i| {
+        volume_map.get(i).copied().unwrap_or(100) != 100
+    });
+
+    let mut args: Vec<String> = vec![];
+
+    // Video mapping (normal — no filter_complex needed for video)
+    args.extend(vf_arg.to_vec());
+    args.extend(["-map".into(), "0:v:0".into()]);
+
+    if has_volume_changes {
+        let mut filter_parts: Vec<String> = vec![];
+        let mut out_labels: Vec<String> = vec![];
+        for (out_idx, &ai) in active_audio.iter().enumerate() {
+            let vol_pct = volume_map.get(&ai).copied().unwrap_or(100);
+            let vol_f   = vol_pct as f64 / 100.0;
+            let label   = format!("a{out_idx}");
+            filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
+            out_labels.push(format!("[{label}]"));
+        }
+        if !filter_parts.is_empty() {
+            args.extend(["-filter_complex".into(), filter_parts.join(";")]);
+            for label in &out_labels {
+                args.extend(["-map".into(), label.clone()]);
+            }
+        }
+    } else {
+        for &ai in active_audio {
+            args.extend(["-map".into(), format!("0:a:{ai}?")]);
+        }
+    }
+
+    (args, false)
+}
+
 #[tauri::command]
 pub async fn encode_video_with_progress(
     app: tauri::AppHandle,
@@ -479,6 +586,7 @@ pub async fn encode_video_with_progress(
     deleted_tracks: Vec<usize>,
     volume_map: HashMap<usize, u32>,
     total_audio_tracks: usize,
+    merge_audio_tracks: bool,
     use_av1: bool,
     use_gpu: bool,
 ) -> Result<String, String> {
@@ -521,9 +629,11 @@ pub async fn encode_video_with_progress(
             .filter(|i| !deleted_tracks.contains(i))
             .collect();
 
-        let has_volume_changes = active_audio.iter().any(|i| {
-            volume_map.get(i).copied().unwrap_or(100) != 100
-        });
+        // Build audio args — handles both merge and non-merge paths.
+        // When merging, video filter is folded into filter_complex so we pass
+        // an empty vf_arg to the builder; when not merging we pass it as-is.
+        let (audio_map_args, used_filter_complex) =
+            build_audio_args(&active_audio, &volume_map, merge_audio_tracks, &vf_arg);
 
         // ── AV1 single-pass path ──────────────────────────────────────────────────────
         if use_av1 {
@@ -536,30 +646,13 @@ pub async fn encode_video_with_progress(
             if let Some(dur) = clip_duration {
                 av1_args.extend(["-t".into(), format!("{dur:.6}")]);
             }
-            av1_args.extend(vf_arg);
-            av1_args.extend(["-map".into(), "0:v:0".into()]);
 
-            if has_volume_changes {
-                let mut filter_parts: Vec<String> = vec![];
-                let mut out_labels: Vec<String> = vec![];
-                for (out_idx, &ai) in active_audio.iter().enumerate() {
-                    let vol_pct = volume_map.get(&ai).copied().unwrap_or(100);
-                    let vol_f   = vol_pct as f64 / 100.0;
-                    let label   = format!("a{out_idx}");
-                    filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
-                    out_labels.push(format!("[{label}]"));
-                }
-                if !filter_parts.is_empty() {
-                    av1_args.extend(["-filter_complex".into(), filter_parts.join(";")]);
-                    for label in &out_labels {
-                        av1_args.extend(["-map".into(), label.clone()]);
-                    }
-                }
-            } else {
-                for &ai in &active_audio {
-                    av1_args.extend(["-map".into(), format!("0:a:{ai}?")]);
-                }
+            // When NOT using filter_complex for merging, video filter goes here
+            if !used_filter_complex {
+                av1_args.extend(vf_arg.clone());
             }
+
+            av1_args.extend(audio_map_args.clone());
 
             if use_gpu {
                 let maxrate = video_bv.clone();
@@ -615,7 +708,6 @@ pub async fn encode_video_with_progress(
             let mut last_pct = 0.0f64;
 
             for line in reader.lines().flatten() {
-                // Check cancel flag on every progress line.
                 if CANCEL_FLAG.load(Ordering::SeqCst) {
                     abort_child(child, &output);
                     return Err("cancelled".into());
@@ -640,7 +732,6 @@ pub async fn encode_video_with_progress(
                 }
             }
 
-            // Final cancel check after the reader loop drains.
             if CANCEL_FLAG.load(Ordering::SeqCst) {
                 abort_child(child, &output);
                 return Err("cancelled".into());
@@ -679,6 +770,7 @@ pub async fn encode_video_with_progress(
         if let Some(dur) = clip_duration {
             pass1.extend(["-t".into(), format!("{dur:.6}")]);
         }
+        // Pass 1: video-only analysis — always use vf_arg directly (no audio)
         pass1.extend(vf_arg.clone());
         pass1.extend([
             "-c:v".into(), "libx264".into(),
@@ -704,7 +796,6 @@ pub async fn encode_video_with_progress(
         let start1  = std::time::Instant::now();
         let mut last_pct1 = 0.0f64;
         for line in reader1.lines().flatten() {
-            // Check cancel flag during pass 1.
             if CANCEL_FLAG.load(Ordering::SeqCst) {
                 abort_child(child1, &output);
                 return Err("cancelled".into());
@@ -729,7 +820,6 @@ pub async fn encode_video_with_progress(
             }
         }
 
-        // Final cancel check between pass 1 and pass 2.
         if CANCEL_FLAG.load(Ordering::SeqCst) {
             abort_child(child1, &output);
             return Err("cancelled".into());
@@ -742,6 +832,7 @@ pub async fn encode_video_with_progress(
             percent: 50.0, eta_secs: 0.0, pass: 2,
         });
 
+        // ── Pass 2 ────────────────────────────────────────────────────────────
         let mut pass2: Vec<String> = trim_args;
         pass2.extend([
             "-y".into(), "-i".into(), input,
@@ -751,30 +842,13 @@ pub async fn encode_video_with_progress(
         if let Some(dur) = clip_duration {
             pass2.extend(["-t".into(), format!("{dur:.6}")]);
         }
-        pass2.extend(vf_arg);
-        pass2.extend(["-map".into(), "0:v:0".into()]);
 
-        if has_volume_changes {
-            let mut filter_parts: Vec<String> = vec![];
-            let mut out_labels: Vec<String> = vec![];
-            for (out_idx, &ai) in active_audio.iter().enumerate() {
-                let vol_pct = volume_map.get(&ai).copied().unwrap_or(100);
-                let vol_f   = vol_pct as f64 / 100.0;
-                let label   = format!("a{out_idx}");
-                filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
-                out_labels.push(format!("[{label}]"));
-            }
-            if !filter_parts.is_empty() {
-                pass2.extend(["-filter_complex".into(), filter_parts.join(";")]);
-                for label in &out_labels {
-                    pass2.extend(["-map".into(), label.clone()]);
-                }
-            }
-        } else {
-            for &ai in &active_audio {
-                pass2.extend(["-map".into(), format!("0:a:{ai}?")]);
-            }
+        // When NOT using filter_complex for merging, video filter goes here
+        if !used_filter_complex {
+            pass2.extend(vf_arg);
         }
+
+        pass2.extend(audio_map_args);
 
         pass2.extend([
             "-c:v".into(), "libx264".into(),
@@ -799,7 +873,6 @@ pub async fn encode_video_with_progress(
         let mut last_pct = 50.0f64;
 
         for line in reader.lines().flatten() {
-            // Check cancel flag during pass 2.
             if CANCEL_FLAG.load(Ordering::SeqCst) {
                 abort_child(child, &output);
                 return Err("cancelled".into());
@@ -824,7 +897,6 @@ pub async fn encode_video_with_progress(
             }
         }
 
-        // Final cancel check after the reader loop drains.
         if CANCEL_FLAG.load(Ordering::SeqCst) {
             abort_child(child, &output);
             return Err("cancelled".into());
