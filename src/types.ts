@@ -17,7 +17,8 @@ export interface VideoInfo {
 
 /** Edits produced by VideoEditor and consumed by runEncode */
 export interface VideoEdits {
-  trimStart:   number;  // seconds
-  trimEnd:     number;  // seconds
-  audioTracks: { index: number; volume: number; deleted: boolean }[];
+  trimStart:        number;  // seconds
+  trimEnd:          number;  // seconds
+  audioTracks:      { index: number; volume: number; deleted: boolean }[];
+  mergeAudioTracks: boolean; // mix all active tracks into one output stream
 }
