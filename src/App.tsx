@@ -754,7 +754,7 @@ export default function App() {
             <small>video compressor</small>
           </div>
           <div className="drop-hint-text">
-            <p>{dragOver ? "Drop to load" : "Drop files or folders here, or"}</p>
+            <p>{dragOver ? "Drop to load" : "Drop files or folders here"}</p>
             <small>MP4 · MKV · AVI · MOV · WebM · M4V · select multiple for batch</small>
           </div>
           <div className="drop-actions">
@@ -962,7 +962,7 @@ export default function App() {
                 <span className="file-chip-x">&times;</span>
               </div>
               <ThemeBtn theme={theme} onToggle={toggleTheme} />
-              <span className="version-badge">v2.0</span>
+              <span className="version-badge">v2.1</span>
             </div>
           </div>
 
