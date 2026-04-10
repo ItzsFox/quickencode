@@ -42,8 +42,9 @@ interface BatchDoneResult {
   outputDir: string;
 }
 interface GpuEncoderInfo {
-  id:    string;   // "nvenc" | "qsv" | "amf" | "videotoolbox"
-  label: string;   // e.g. "NVIDIA NVENC"
+  id:               string;   // "nvenc" | "qsv" | "amf" | "videotoolbox"
+  label:            string;   // e.g. "NVIDIA NVENC"
+  supported_codecs: string[]; // subset of ["h264", "h265", "av1"]
 }
 
 /** Re-export so App internal code can still use VideoEdits without importing types directly */
@@ -96,15 +97,15 @@ function isVideo(p: string) {
   return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
-/** Human-readable short label for the active GPU encoder shown in the preview tag */
-function gpuShortLabel(gpuEncoder: string, useAv1: boolean): string {
-  const codec = useAv1 ? "AV1" : "H.264";
+/** Human-readable short label for the active encoder shown in the preview tag */
+function gpuShortLabel(codec: string, gpuEncoder: string): string {
+  const codecLabel = codec === "av1" ? "AV1" : codec === "h265" ? "H.265" : "H.264";
   switch (gpuEncoder) {
-    case "nvenc":        return `${codec}·NVENC`;
-    case "qsv":         return `${codec}·QSV`;
-    case "amf":         return useAv1 ? "HEVC·AMF" : `${codec}·AMF`;
-    case "videotoolbox": return useAv1 ? "HEVC·VT" : `${codec}·VT`;
-    default:            return useAv1 ? "AV1·CPU" : "";
+    case "nvenc":         return `${codecLabel}·NVENC`;
+    case "qsv":          return `${codecLabel}·QSV`;
+    case "amf":          return codec === "av1" ? "HEVC·AMF"  : `${codecLabel}·AMF`;
+    case "videotoolbox": return codec === "av1" ? "HEVC·VT"   : `${codecLabel}·VT`;
+    default:             return codec !== "h264" ? `${codecLabel}·CPU` : "";
   }
 }
 
@@ -177,37 +178,31 @@ function ThemeBtn({ theme, onToggle }: ThemeBtnProps) {
 }
 
 interface QualitySettingsProps {
-  quality:     number;
-  resolution:  string;
-  format:      string;
-  audio:       number;
-  fps:         string;
-  useAv1:      boolean;
-  gpuEncoder:  string;
-  gpuOptions:  GpuEncoderInfo[];
-  theme:       "light" | "dark";
-  onQuality:   (v: number) => void;
-  onRes:       (v: string) => void;
-  onFmt:       (v: string) => void;
-  onAudio:     (v: number) => void;
-  onFps:       (v: string) => void;
-  onAv1:       (v: boolean) => void;
-  onGpuEncoder:(v: string) => void;
+  quality:      number;
+  resolution:   string;
+  format:       string;
+  audio:        number;
+  fps:          string;
+  codec:        string;
+  gpuEncoder:   string;
+  accelOptions: { id: string; label: string }[];
+  theme:        "light" | "dark";
+  onQuality:    (v: number) => void;
+  onRes:        (v: string) => void;
+  onFmt:        (v: string) => void;
+  onAudio:      (v: number) => void;
+  onFps:        (v: string) => void;
+  onCodec:      (v: string) => void;
+  onGpuEncoder: (v: string) => void;
 }
 function QualitySettings({
-  quality, resolution, format, audio, fps, useAv1, gpuEncoder, gpuOptions, theme,
-  onQuality, onRes, onFmt, onAudio, onFps, onAv1, onGpuEncoder,
+  quality, resolution, format, audio, fps, codec, gpuEncoder, accelOptions, theme,
+  onQuality, onRes, onFmt, onAudio, onFps, onCodec, onGpuEncoder,
 }: QualitySettingsProps) {
   const ql    = qualityInfo(quality);
   const isDark = theme === "dark";
   const bg = (val: number, min: number, max: number) =>
     sliderBg(val, min, max, isDark ? "#888888" : "#555555", isDark ? "#333336" : "#d0d0d0");
-
-  // GPU dropdown: always show "CPU" first, then detected GPU options.
-  const gpuSelectOptions: { value: string; label: string }[] = [
-    { value: "cpu", label: "CPU" },
-    ...gpuOptions.map(g => ({ value: g.id, label: g.label })),
-  ];
 
   return (
     <>
@@ -259,33 +254,26 @@ function QualitySettings({
               <option value="24">24 fps</option>
             </select>
           </div>
-          {gpuSelectOptions.length > 1 && (
-            <div className="setting">
-              <label>GPU</label>
-              <select
-                value={gpuEncoder}
-                onChange={e => onGpuEncoder(e.target.value)}
-                title="Select GPU acceleration backend. CPU uses software encoding (2-pass for H.264, single-pass for AV1)."
-              >
-                {gpuSelectOptions.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
-        <div className="av1-toggle-row">
-          <label className="av1-toggle" htmlFor="av1-checkbox"
-            title="Uses SVT-AV1 encoder — better quality at the same file size, but slower to encode than H.264">
-            <input
-              id="av1-checkbox"
-              type="checkbox"
-              checked={useAv1}
-              onChange={e => onAv1(e.target.checked)}
-            />
-            <span className="av1-toggle-label">AV1 encoder</span>
-            {useAv1 && <span className="av1-slow-badge">slower encode</span>}
-          </label>
+          <div className="setting">
+            <label>Encoder</label>
+            <select value={codec} onChange={e => onCodec(e.target.value)}>
+              <option value="h264">H.264</option>
+              <option value="h265">H.265 (HEVC)</option>
+              <option value="av1">AV1</option>
+            </select>
+          </div>
+          <div className="setting">
+            <label>Hardware Accel</label>
+            <select
+              value={gpuEncoder}
+              onChange={e => onGpuEncoder(e.target.value)}
+              title="GPU encoding backend for the selected codec. Software uses CPU-only encoding."
+            >
+              {accelOptions.map(o => (
+                <option key={o.id} value={o.id}>{o.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
     </>
@@ -334,11 +322,16 @@ export default function App() {
   const [quality, setQuality]       = useState(75);
   const [audio, setAudio]           = useState(128);
   const [fps, setFps]               = useState("original");
-  const [useAv1, setUseAv1]         = useState(false);
-  // gpuEncoder: "cpu" = software, or "nvenc" / "qsv" / "amf" / "videotoolbox"
+  // codec: "h264" | "h265" | "av1"
+  const [codec, setCodec]           = useState<string>("h264");
+  // gpuEncoder: "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
   const [gpuEncoder, setGpuEncoder] = useState("cpu");
-  // gpuOptions: populated on mount via probe_gpu_encoders
+  // raw list from probe_gpu_encoders — used to compute accelOptions when codec changes
   const [gpuOptions, setGpuOptions] = useState<GpuEncoderInfo[]>([]);
+  // filtered accel options for the current codec
+  const [accelOptions, setAccelOptions] = useState<{ id: string; label: string }[]>([
+    { id: "cpu", label: "Software (CPU)" },
+  ]);
   const [encoding, setEncoding]     = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress]     = useState<EncodeProgress | null>(null);
@@ -375,13 +368,27 @@ export default function App() {
       .then(detected => {
         if (!mountedRef.current) return;
         setGpuOptions(detected);
-        // Auto-select the first GPU found
-        if (detected.length > 0) {
-          setGpuEncoder(detected[0].id);
-        }
       })
       .catch(() => { /* no GPU info — stay on cpu */ });
   }, []);
+
+  // Re-compute Hardware Accel options whenever codec or detected GPUs change.
+  // Auto-selects the best available option (first GPU > CPU).
+  useEffect(() => {
+    const opts: { id: string; label: string }[] = [{ id: "cpu", label: "Software (CPU)" }];
+    for (const gpu of gpuOptions) {
+      if (gpu.supported_codecs.includes(codec)) {
+        opts.push({ id: gpu.id, label: gpu.label });
+      } else if (codec === "av1" && (gpu.id === "amf" || gpu.id === "videotoolbox")) {
+        // AMF and VideoToolbox fall back to HEVC when AV1 is chosen — still offer them
+        opts.push({ id: gpu.id, label: `${gpu.label} (HEVC fallback)` });
+      }
+    }
+    setAccelOptions(opts);
+    // Auto-select best: first GPU option wins over CPU
+    const best = opts.find(o => o.id !== "cpu") ?? opts[0];
+    setGpuEncoder(best.id);
+  }, [codec, gpuOptions]);
 
   const base    = resolution === "original" ? (info?.bitrate_kbps ?? 5000) : RES_BITRATES[resolution];
   const videoBr = Math.max(Math.round(base * (quality / 100)), 80);
@@ -394,7 +401,7 @@ export default function App() {
   const reduction = info ? Math.round((1 - estMb / (info.size_mb * trimRatio + 0.001)) * 100) : 0;
 
   const loadEncodedFrame = useCallback((
-    idx: number, vbr: number, res: string, f: string, av1: boolean, gpu: string
+    idx: number, vbr: number, res: string, f: string, c: string, gpu: string
   ) => {
     if (!filePath || !info) return;
     if (encDebounce.current) clearTimeout(encDebounce.current);
@@ -404,7 +411,7 @@ export default function App() {
       try {
         const result = await invoke<string>("get_encoded_frame", {
           input: filePath, timestamp: ts, resolution: res,
-          videoBitrateKbps: vbr, fps: f, useAv1: av1, gpuEncoder: gpu,
+          videoBitrateKbps: vbr, fps: f, codec: c, gpuEncoder: gpu,
         });
         if (mountedRef.current) setEncFrames(prev => ({ ...prev, [idx]: result }));
       } catch (e) {
@@ -418,13 +425,13 @@ export default function App() {
   useEffect(() => {
     if (screen !== "editor" || !info) return;
     setEncFrames({});
-    loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1, gpuEncoder);
+    loadEncodedFrame(frameIdx, videoBr, resolution, fps, codec, gpuEncoder);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoBr, resolution, fps, useAv1, gpuEncoder, screen]);
+  }, [videoBr, resolution, fps, codec, gpuEncoder, screen]);
 
   useEffect(() => {
     if (screen !== "editor" || !info) return;
-    if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1, gpuEncoder);
+    if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps, codec, gpuEncoder);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameIdx]);
 
@@ -447,12 +454,12 @@ export default function App() {
       setScreen("editor");
       const b = resolution === "original" ? videoInfo.bitrate_kbps : (RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps);
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
-      loadEncodedFrame(0, vbr, resolution, fps, useAv1, gpuEncoder);
+      loadEncodedFrame(0, vbr, resolution, fps, codec, gpuEncoder);
     } catch (e) {
       setStatus(`❌ ${e}`);
       setScreen("drop");
     }
-  }, [resolution, quality, fps, useAv1, gpuEncoder, loadEncodedFrame]);
+  }, [resolution, quality, fps, codec, gpuEncoder, loadEncodedFrame]);
 
   const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
     const videos: string[] = [];
@@ -522,12 +529,12 @@ export default function App() {
 
   const runEncode = async (
     vbr: number, abr: number, res: string, f: string,
-    outPath?: string, av1Override?: boolean, gpuOverride?: string
+    outPath?: string, codecOverride?: string, gpuOverride?: string
   ) => {
     if (!filePath || !info) return;
     const out = outPath ?? await save({ filters: [{ name: "Output", extensions: [format] }] });
     if (!out) return;
-    const encodeWithAv1 = av1Override ?? useAv1;
+    const encodeCodec = codecOverride ?? codec;
     const encodeWithGpu = gpuOverride ?? gpuEncoder;
     setEncoding(true);
     setCancelling(false);
@@ -556,7 +563,7 @@ export default function App() {
         volumeMap,
         totalAudioTracks,
         mergeAudioTracks,
-        useAv1:           encodeWithAv1,
+        codec:            encodeCodec,
         gpuEncoder:       encodeWithGpu,
       });
       let finalMb = estMb;
@@ -585,7 +592,7 @@ export default function App() {
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
-    runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, useAv1, gpuEncoder);
+    runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, codec, gpuEncoder);
   };
 
   const handleCancelEncode = async () => {
@@ -670,7 +677,7 @@ export default function App() {
           volumeMap,
           totalAudioTracks: infoRaw.audio_tracks?.length ?? 1,
           mergeAudioTracks,
-          useAv1,
+          codec,
           gpuEncoder,
         });
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
@@ -741,14 +748,18 @@ export default function App() {
       })()
     : null;
 
-  // Progress pass label — now shows actual encoder name
+  // Progress pass label — shows actual encoder name
   const passLabel = (() => {
     if (!progress) return "";
     if (progress.percent >= 100) return "Finalizing";
-    const isGpu     = gpuEncoder !== "cpu";
-    const gpuLabel  = gpuOptions.find(g => g.id === gpuEncoder)?.label ?? gpuEncoder.toUpperCase();
-    if (useAv1) {
+    const isGpu    = gpuEncoder !== "cpu";
+    const gpuLabel = gpuOptions.find(g => g.id === gpuEncoder)?.label ?? gpuEncoder.toUpperCase();
+    if (codec === "av1") {
       const enc = isGpu ? gpuLabel : "CPU · SVT-AV1";
+      return `Pass 1 / 1 — ${enc}`;
+    }
+    if (codec === "h265") {
+      const enc = isGpu ? gpuLabel : "CPU · x265";
       return `Pass 1 / 1 — ${enc}`;
     }
     // H.264
@@ -758,7 +769,7 @@ export default function App() {
   })();
 
   // Preview tag label
-  const previewTagExtra = gpuShortLabel(gpuEncoder, useAv1);
+  const previewTagExtra = gpuShortLabel(codec, gpuEncoder);
 
   return (
     <div className="app">
@@ -974,9 +985,9 @@ export default function App() {
             <div className="batch-settings-row settings-row">
               <QualitySettings
                 quality={quality} resolution={resolution} format={format} audio={audio} fps={fps}
-                useAv1={useAv1} gpuEncoder={gpuEncoder} gpuOptions={gpuOptions} theme={theme}
+                codec={codec} gpuEncoder={gpuEncoder} accelOptions={accelOptions} theme={theme}
                 onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
-                onAv1={setUseAv1} onGpuEncoder={setGpuEncoder}
+                onCodec={setCodec} onGpuEncoder={setGpuEncoder}
               />
             </div>
             <div className="batch-actions">
@@ -1087,9 +1098,9 @@ export default function App() {
           <div className="settings-row">
             <QualitySettings
               quality={quality} resolution={resolution} format={format} audio={audio} fps={fps}
-              useAv1={useAv1} gpuEncoder={gpuEncoder} gpuOptions={gpuOptions} theme={theme}
+              codec={codec} gpuEncoder={gpuEncoder} accelOptions={accelOptions} theme={theme}
               onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
-              onAv1={setUseAv1} onGpuEncoder={setGpuEncoder}
+              onCodec={setCodec} onGpuEncoder={setGpuEncoder}
             />
           </div>
 
