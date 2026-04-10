@@ -1726,3 +1726,139 @@ select:focus { border-color: var(--text-dim); }
   color: rgba(255, 255, 255, 0.9);
   background: rgba(255, 255, 255, 0.14);
 }
+
+/* ══════════════════════════════════════════
+   GPU ENCODER SELECTOR
+   ══════════════════════════════════════════ */
+
+/* Row sits below the AV1 toggle, separated by a subtle divider */
+.gpu-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 5px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+  flex-wrap: nowrap;
+}
+
+.gpu-select-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Compact inline select — overrides the global select defaults */
+.gpu-select {
+  padding: 3px 20px 3px 8px !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  height: 24px;
+  flex: 1;
+  min-width: 0;
+  max-width: 160px;
+  border-radius: var(--radius-pill) !important;
+  background-color: var(--surface-2) !important;
+  border-color: var(--border-2) !important;
+}
+.gpu-select:focus {
+  border-color: var(--text-dim) !important;
+}
+
+/* Info icon button — ⓘ trigger for the tooltip */
+.gpu-info-btn {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border-2);
+  background: none;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  flex-shrink: 0;
+  padding: 0;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  position: relative;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.gpu-info-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* Tooltip bubble — appears above the info button on hover */
+.gpu-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  width: 230px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  padding: 10px 12px 9px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s;
+}
+.gpu-info-btn:hover .gpu-tooltip,
+.gpu-info-btn:focus-within .gpu-tooltip {
+  opacity: 1;
+}
+
+/* Down-pointing arrow */
+.gpu-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--border-2);
+}
+.gpu-tooltip::before {
+  content: "";
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--surface);
+  z-index: 1;
+}
+
+.gpu-tooltip-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+  letter-spacing: -0.1px;
+}
+.gpu-tooltip-desc {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  font-weight: 400;
+}
+.gpu-tooltip-note {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+  line-height: 1.45;
+}
+
+/* Suppress the old badge repurpose — tooltip replaces it */
+.gpu-badge { display: none; }
