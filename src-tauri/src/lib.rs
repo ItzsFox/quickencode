@@ -16,6 +16,7 @@ pub fn run() {
             commands::open_folder,
             commands::extract_audio_track,
             commands::clear_preview_track_cache,
+            commands::probe_gpu_encoders,
         ])
         .run(tauri::generate_context!())
         .expect("error running app");
