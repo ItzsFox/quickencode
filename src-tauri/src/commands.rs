@@ -57,21 +57,24 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
 }
 
 // ── GPU encoder identifiers ───────────────────────────────────────────────────
-// These are the string values passed from the frontend via `gpu_encoder`.
-// "cpu"            → no GPU, use libsvtav1 / libx264
-// "nvenc"          → NVIDIA (av1_nvenc / h264_nvenc)
-// "qsv"            → Intel QuickSync (av1_qsv / h264_qsv)
-// "amf"            → AMD AMF (hevc_amf / h264_amf)
-// "videotoolbox"   → Apple VideoToolbox (hevc_videotoolbox / h264_videotoolbox)
+// gpu_encoder string values:
+//   "cpu"            → software encoding
+//   "nvenc"          → NVIDIA (h264_nvenc / hevc_nvenc / av1_nvenc)
+//   "qsv"            → Intel QuickSync (h264_qsv / hevc_qsv / av1_qsv)
+//   "amf"            → AMD AMF (h264_amf / hevc_amf)  — no AV1 yet
+//   "videotoolbox"   → Apple (h264_videotoolbox / hevc_videotoolbox) — no AV1
+//
+// codec string values (replaces the old use_av1 bool):
+//   "h264" | "h265" | "av1"
 
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct GpuEncoderInfo {
-    pub id:    String,  // "nvenc" | "qsv" | "amf" | "videotoolbox"
-    pub label: String,  // Human-readable label shown in UI
+    pub id:               String,   // "nvenc" | "qsv" | "amf" | "videotoolbox"
+    pub label:            String,   // Human-readable label
+    pub supported_codecs: Vec<String>, // subset of ["h264", "h265", "av1"]
 }
 
 /// Probe ffmpeg to see which GPU encoders are actually available on this machine.
-/// Returns a list of available GPU encoder infos (may be empty).
 #[tauri::command]
 pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
     let ffmpeg = match resolve_bin(&app, "ffmpeg") {
@@ -91,36 +94,53 @@ pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
 
     let mut result = vec![];
 
-    // NVENC — NVIDIA. av1_nvenc requires RTX 40+, but h264_nvenc works on GTX 600+.
-    // We report "nvenc" if either is present.
-    if stdout.contains("h264_nvenc") || stdout.contains("av1_nvenc") {
+    // NVENC — NVIDIA
+    if stdout.contains("h264_nvenc") || stdout.contains("hevc_nvenc") || stdout.contains("av1_nvenc") {
+        let mut codecs = vec![];
+        if stdout.contains("h264_nvenc")  { codecs.push("h264".to_string()); }
+        if stdout.contains("hevc_nvenc")  { codecs.push("h265".to_string()); }
+        if stdout.contains("av1_nvenc")   { codecs.push("av1".to_string()); }
         result.push(GpuEncoderInfo {
-            id:    "nvenc".into(),
-            label: "NVIDIA NVENC".into(),
+            id:               "nvenc".into(),
+            label:            "NVIDIA NVENC".into(),
+            supported_codecs: codecs,
         });
     }
 
     // QuickSync — Intel iGPU / Arc
-    if stdout.contains("h264_qsv") || stdout.contains("av1_qsv") {
+    if stdout.contains("h264_qsv") || stdout.contains("hevc_qsv") || stdout.contains("av1_qsv") {
+        let mut codecs = vec![];
+        if stdout.contains("h264_qsv")  { codecs.push("h264".to_string()); }
+        if stdout.contains("hevc_qsv")  { codecs.push("h265".to_string()); }
+        if stdout.contains("av1_qsv")   { codecs.push("av1".to_string()); }
         result.push(GpuEncoderInfo {
-            id:    "qsv".into(),
-            label: "Intel QuickSync".into(),
+            id:               "qsv".into(),
+            label:            "Intel QuickSync".into(),
+            supported_codecs: codecs,
         });
     }
 
-    // AMF — AMD GPUs (RX 400+)
+    // AMF — AMD (no AV1 in most ffmpeg builds)
     if stdout.contains("h264_amf") || stdout.contains("hevc_amf") {
+        let mut codecs = vec![];
+        if stdout.contains("h264_amf") { codecs.push("h264".to_string()); }
+        if stdout.contains("hevc_amf") { codecs.push("h265".to_string()); }
         result.push(GpuEncoderInfo {
-            id:    "amf".into(),
-            label: "AMD AMF".into(),
+            id:               "amf".into(),
+            label:            "AMD AMF".into(),
+            supported_codecs: codecs,
         });
     }
 
-    // VideoToolbox — macOS (Apple Silicon + Intel Mac with Metal)
+    // VideoToolbox — macOS
     if stdout.contains("h264_videotoolbox") || stdout.contains("hevc_videotoolbox") {
+        let mut codecs = vec![];
+        if stdout.contains("h264_videotoolbox") { codecs.push("h264".to_string()); }
+        if stdout.contains("hevc_videotoolbox") { codecs.push("h265".to_string()); }
         result.push(GpuEncoderInfo {
-            id:    "videotoolbox".into(),
-            label: "Apple VideoToolbox".into(),
+            id:               "videotoolbox".into(),
+            label:            "Apple VideoToolbox".into(),
+            supported_codecs: codecs,
         });
     }
 
@@ -128,7 +148,6 @@ pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
 }
 
 // ── probe_av1_encoder ─────────────────────────────────────────────────────────
-// Returns "libsvtav1" if available, otherwise "libaom-av1".
 fn probe_av1_encoder(ffmpeg: &std::path::Path) -> &'static str {
     let out = Command::new(ffmpeg)
         .args(["-encoders", "-v", "quiet"])
@@ -143,25 +162,20 @@ fn probe_av1_encoder(ffmpeg: &std::path::Path) -> &'static str {
     "libaom-av1"
 }
 
-/// Resolve which concrete ffmpeg video codec to use given the user's codec/gpu choices.
-/// Returns `(codec_name, extra_args, is_single_pass)`.
-///
-/// * `use_av1`    — true when the user selected "AV1" codec
-/// * `gpu_encoder`— "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
-/// * `video_bv`   — bitrate string e.g. "3000k"
-/// * `ffmpeg`     — path to ffmpeg binary (needed to probe CPU AV1 encoder)
+/// Resolve which concrete ffmpeg video codec to use.
+/// `codec`       — "h264" | "h265" | "av1"
+/// `gpu_encoder` — "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
+/// Returns `(codec_args, is_single_pass)`.
 fn resolve_video_codec(
-    use_av1:     bool,
+    codec:       &str,
     gpu_encoder: &str,
     video_bv:    &str,
     ffmpeg:      &std::path::Path,
 ) -> (Vec<String>, bool) {
-    // is_single_pass: AV1 and all GPU encoders use a single pass.
-    // x264 CPU uses 2-pass — caller handles this separately.
-    match (use_av1, gpu_encoder) {
+    match (codec, gpu_encoder) {
 
         // ── AV1 paths ────────────────────────────────────────────────────────
-        (true, "nvenc") => (vec![
+        ("av1", "nvenc") => (vec![
             "-c:v".into(), "av1_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-cq".into(), "28".into(),
@@ -170,15 +184,15 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        (true, "qsv") => (vec![
+        ("av1", "qsv") => (vec![
             "-c:v".into(), "av1_qsv".into(),
             "-preset".into(), "medium".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
         ], true),
 
-        // AMD AMF has no AV1 encoder in most ffmpeg builds yet — fall back to hevc_amf
-        (true, "amf") => (vec![
+        // AMD AMF has no AV1 — fall back to hevc_amf
+        ("av1", "amf") => (vec![
             "-c:v".into(), "hevc_amf".into(),
             "-quality".into(), "balanced".into(),
             "-b:v".into(), video_bv.into(),
@@ -186,13 +200,13 @@ fn resolve_video_codec(
         ], true),
 
         // VideoToolbox has no AV1 — fall back to hevc_videotoolbox
-        (true, "videotoolbox") => (vec![
+        ("av1", "videotoolbox") => (vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
         ], true),
 
         // AV1 CPU
-        (true, _) => {
+        ("av1", _) => {
             let av1_enc = probe_av1_encoder(ffmpeg);
             if av1_enc == "libsvtav1" {
                 (vec![
@@ -212,8 +226,45 @@ fn resolve_video_codec(
             }
         }
 
-        // ── H.264 paths (use_av1 = false) ───────────────────────────────────
-        (false, "nvenc") => (vec![
+        // ── H.265 (HEVC) paths ───────────────────────────────────────────────
+        ("h265", "nvenc") => (vec![
+            "-c:v".into(), "hevc_nvenc".into(),
+            "-preset".into(), "p4".into(),
+            "-rc".into(), "vbr".into(),
+            "-cq".into(), "24".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+            "-bufsize".into(), video_bv.into(),
+        ], true),
+
+        ("h265", "qsv") => (vec![
+            "-c:v".into(), "hevc_qsv".into(),
+            "-preset".into(), "medium".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+        ], true),
+
+        ("h265", "amf") => (vec![
+            "-c:v".into(), "hevc_amf".into(),
+            "-quality".into(), "balanced".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+        ], true),
+
+        ("h265", "videotoolbox") => (vec![
+            "-c:v".into(), "hevc_videotoolbox".into(),
+            "-b:v".into(), video_bv.into(),
+        ], true),
+
+        // H.265 CPU — libx265 single-pass CRF
+        ("h265", _) => (vec![
+            "-c:v".into(), "libx265".into(),
+            "-b:v".into(), video_bv.into(),
+            "-x265-params".into(), "log-level=error".into(),
+        ], true),
+
+        // ── H.264 paths ──────────────────────────────────────────────────────
+        (_, "nvenc") => (vec![
             "-c:v".into(), "h264_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "vbr".into(),
@@ -223,42 +274,43 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        (false, "qsv") => (vec![
+        (_, "qsv") => (vec![
             "-c:v".into(), "h264_qsv".into(),
             "-preset".into(), "medium".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
         ], true),
 
-        (false, "amf") => (vec![
+        (_, "amf") => (vec![
             "-c:v".into(), "h264_amf".into(),
             "-quality".into(), "balanced".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
         ], true),
 
-        (false, "videotoolbox") => (vec![
+        (_, "videotoolbox") => (vec![
             "-c:v".into(), "h264_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
         ], true),
 
-        // H.264 CPU — 2-pass (caller handles the two-pass logic)
-        (false, _) => (vec![
+        // H.264 CPU — 2-pass
+        (_, _) => (vec![
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv.into(),
         ], false),
     }
 }
 
-/// Same as resolve_video_codec but tuned for quick preview frames (speed over quality).
+/// Same as resolve_video_codec but tuned for quick preview frames.
 fn resolve_video_codec_preview(
-    use_av1:     bool,
+    codec:       &str,
     gpu_encoder: &str,
     video_bv:    &str,
     ffmpeg:      &std::path::Path,
 ) -> Vec<String> {
-    match (use_av1, gpu_encoder) {
-        (true, "nvenc") => vec![
+    match (codec, gpu_encoder) {
+        // AV1
+        ("av1", "nvenc") => vec![
             "-c:v".into(), "av1_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-cq".into(), "28".into(),
@@ -266,21 +318,21 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        (true, "qsv") => vec![
+        ("av1", "qsv") => vec![
             "-c:v".into(), "av1_qsv".into(),
             "-preset".into(), "faster".into(),
             "-b:v".into(), video_bv.into(),
         ],
-        (true, "amf") => vec![
+        ("av1", "amf") => vec![
             "-c:v".into(), "hevc_amf".into(),
             "-quality".into(), "speed".into(),
             "-b:v".into(), video_bv.into(),
         ],
-        (true, "videotoolbox") => vec![
+        ("av1", "videotoolbox") => vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
         ],
-        (true, _) => {
+        ("av1", _) => {
             let av1_enc = probe_av1_encoder(ffmpeg);
             if av1_enc == "libsvtav1" {
                 vec![
@@ -298,28 +350,57 @@ fn resolve_video_codec_preview(
                 ]
             }
         }
-        (false, "nvenc") => vec![
+        // H.265
+        ("h265", "nvenc") => vec![
+            "-c:v".into(), "hevc_nvenc".into(),
+            "-preset".into(), "p1".into(),
+            "-rc".into(), "vbr".into(),
+            "-b:v".into(), video_bv.into(),
+            "-bufsize".into(), format!("{}k", video_bv.trim_end_matches('k').parse::<u32>().unwrap_or(3000) * 2),
+        ],
+        ("h265", "qsv") => vec![
+            "-c:v".into(), "hevc_qsv".into(),
+            "-preset".into(), "faster".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        ("h265", "amf") => vec![
+            "-c:v".into(), "hevc_amf".into(),
+            "-quality".into(), "speed".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        ("h265", "videotoolbox") => vec![
+            "-c:v".into(), "hevc_videotoolbox".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        ("h265", _) => vec![
+            "-c:v".into(), "libx265".into(),
+            "-preset".into(), "ultrafast".into(),
+            "-b:v".into(), video_bv.into(),
+            "-x265-params".into(), "log-level=error".into(),
+        ],
+        // H.264
+        (_, "nvenc") => vec![
             "-c:v".into(), "h264_nvenc".into(),
             "-preset".into(), "p1".into(),
             "-rc".into(), "vbr".into(),
             "-b:v".into(), video_bv.into(),
             "-bufsize".into(), format!("{}k", video_bv.trim_end_matches('k').parse::<u32>().unwrap_or(3000) * 2),
         ],
-        (false, "qsv") => vec![
+        (_, "qsv") => vec![
             "-c:v".into(), "h264_qsv".into(),
             "-preset".into(), "faster".into(),
             "-b:v".into(), video_bv.into(),
         ],
-        (false, "amf") => vec![
+        (_, "amf") => vec![
             "-c:v".into(), "h264_amf".into(),
             "-quality".into(), "speed".into(),
             "-b:v".into(), video_bv.into(),
         ],
-        (false, "videotoolbox") => vec![
+        (_, "videotoolbox") => vec![
             "-c:v".into(), "h264_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
         ],
-        (false, _) => vec![
+        (_, _) => vec![
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv.into(),
             "-bufsize".into(), format!("{}k", video_bv.trim_end_matches('k').parse::<u32>().unwrap_or(3000) * 2),
@@ -627,7 +708,7 @@ pub async fn get_encoded_frame(
     resolution: String,
     video_bitrate_kbps: u32,
     fps: String,
-    use_av1: bool,
+    codec: String,       // "h264" | "h265" | "av1"
     gpu_encoder: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -653,7 +734,7 @@ pub async fn get_encoded_frame(
         ];
         if !vf_parts.is_empty() { args.extend(["-vf".into(), vf_parts.join(",")]); }
 
-        let codec_args = resolve_video_codec_preview(use_av1, &gpu_encoder, &bv, &ffmpeg);
+        let codec_args = resolve_video_codec_preview(&codec, &gpu_encoder, &bv, &ffmpeg);
         args.extend(codec_args);
         args.extend(["-an".into(), clip_s.clone()]);
 
@@ -673,14 +754,12 @@ pub async fn get_encoded_frame(
 
 // ── encode_video_with_progress ──────────────────────────────────────────────────────────────────
 
-/// Kill a child process and delete the (partial) output file.
 fn abort_child(mut child: std::process::Child, output: &str) {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_file(output);
 }
 
-/// Build the audio portion of an ffmpeg argument list.
 fn build_audio_args(
     active_audio:       &[usize],
     volume_map:         &HashMap<usize, u32>,
@@ -768,8 +847,8 @@ pub async fn encode_video_with_progress(
     volume_map: HashMap<usize, u32>,
     total_audio_tracks: usize,
     merge_audio_tracks: bool,
-    use_av1: bool,
-    gpu_encoder: String,  // "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
+    codec: String,       // "h264" | "h265" | "av1"
+    gpu_encoder: String, // "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
 ) -> Result<String, String> {
     CANCEL_FLAG.store(false, Ordering::SeqCst);
 
@@ -812,11 +891,10 @@ pub async fn encode_video_with_progress(
         let (audio_map_args, used_filter_complex) =
             build_audio_args(&active_audio, &volume_map, merge_audio_tracks, &vf_arg);
 
-        // Resolve which codec to use and whether it's single-pass
         let (codec_args, is_single_pass) =
-            resolve_video_codec(use_av1, &gpu_encoder, &video_bv, &ffmpeg);
+            resolve_video_codec(&codec, &gpu_encoder, &video_bv, &ffmpeg);
 
-        // ── Single-pass path (AV1 CPU + all GPU encoders) ─────────────────────
+        // ── Single-pass path ──────────────────────────────────────────────────
         if is_single_pass {
             let _ = app.emit("encode-progress", EncodeProgress {
                 percent: 0.0, eta_secs: 0.0, pass: 1,
@@ -885,15 +963,15 @@ pub async fn encode_video_with_progress(
             let status = child.wait().map_err(|e| e.to_string())?;
             if !status.success() {
                 return Err(format!(
-                    "FFmpeg encode failed (exit {:?}) — encoder: {}, av1: {}",
-                    status.code(), gpu_encoder, use_av1
+                    "FFmpeg encode failed (exit {:?}) — codec: {}, gpu: {}",
+                    status.code(), codec, gpu_encoder
                 ));
             }
 
             let out_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
             if out_size == 0 {
                 return Err(format!(
-                    "Encode produced an empty output file (encoder: {}).", gpu_encoder
+                    "Encode produced an empty output file (codec: {}, gpu: {}).", codec, gpu_encoder
                 ));
             }
 
