@@ -58,6 +58,65 @@ const RES_BITRATES: Record<string, number> = {
   "1080p": 5000, "720p": 2500, "480p": 1000,
 };
 
+// ─────────────────────────────────────────────────────────
+// ENCODER INFO DATA
+// ─────────────────────────────────────────────────────────
+interface EncoderInfo {
+  name:    string;
+  tagline: string;
+  pros:    string[];
+  cons:    string[];
+  bestFor: string;
+}
+const ENCODER_INFO: Record<string, EncoderInfo> = {
+  h264: {
+    name:    "H.264 (AVC)",
+    tagline: "The universal standard — works everywhere.",
+    pros: [
+      "Plays on literally every device, TV, phone, browser and platform",
+      "Fastest to encode — great for quick exports",
+      "Hardware acceleration available on virtually all GPUs",
+      "Smallest compatibility risk — if in doubt, use this",
+    ],
+    cons: [
+      "Larger file sizes compared to H.265 and AV1 at the same quality",
+      "Older technology — not as efficient with high-res video (4K+)",
+    ],
+    bestFor: "Sharing clips, Discord, social media, anything that needs to play anywhere without issues.",
+  },
+  h265: {
+    name:    "H.265 (HEVC)",
+    tagline: "Half the size of H.264 at the same quality.",
+    pros: [
+      "~40–50% smaller files than H.264 at equivalent quality",
+      "Excellent for 4K and high-resolution video",
+      "Wide GPU hardware acceleration support (NVENC, AMF, VideoToolbox)",
+      "Supported on most modern devices made after ~2016",
+    ],
+    cons: [
+      "Slower to encode on CPU compared to H.264",
+      "Some older browsers (Firefox) and devices may not play it natively",
+      "Slightly less universal than H.264",
+    ],
+    bestFor: "Archiving footage, high-quality exports, saving storage space while keeping great visuals.",
+  },
+  av1: {
+    name:    "AV1",
+    tagline: "The future of compression — tiny files, stunning quality.",
+    pros: [
+      "Best compression of the three — smaller files than H.265 at the same quality",
+      "Royalty-free and open standard (used by YouTube, Netflix, Discord)",
+      "Excellent quality at very low bitrates",
+    ],
+    cons: [
+      "Very slow to encode on CPU — can be 10–20× slower than H.264",
+      "GPU hardware support is newer; older cards (pre-2022) may fall back to CPU",
+      "Some devices and players still don't support it natively",
+    ],
+    bestFor: "Web streaming, archiving at maximum efficiency, or when you have time to spare and want the smallest possible file.",
+  },
+};
+
 function fmtTime(s: number) {
   const h   = Math.floor(s / 3600);
   const m   = Math.floor((s % 3600) / 60);
@@ -142,6 +201,15 @@ const EditIcon = () => (
   </svg>
 );
 
+/** Info circle icon */
+const InfoIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="16" x2="12" y2="12" />
+    <line x1="12" y1="8" x2="12.01" y2="8" />
+  </svg>
+);
+
 type Screen = "drop" | "loading" | "editor" | "batch" | "done" | "batch-done";
 
 // ── Sub-components lifted outside App to prevent remount on every render ──
@@ -177,29 +245,80 @@ function ThemeBtn({ theme, onToggle }: ThemeBtnProps) {
   );
 }
 
+// ── Encoder Info Modal ────────────────────────────────────
+interface EncoderInfoModalProps {
+  codec: string;
+  onClose: () => void;
+}
+function EncoderInfoModal({ codec, onClose }: EncoderInfoModalProps) {
+  const info = ENCODER_INFO[codec];
+  if (!info) return null;
+
+  // Close on Escape key
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div className="enc-info-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label={`${info.name} information`}>
+      <div className="enc-info-modal" onClick={e => e.stopPropagation()}>
+        <div className="enc-info-header">
+          <div>
+            <div className="enc-info-name">{info.name}</div>
+            <div className="enc-info-tagline">{info.tagline}</div>
+          </div>
+          <button className="enc-info-close" onClick={onClose} aria-label="Close">&times;</button>
+        </div>
+
+        <div className="enc-info-section">
+          <div className="enc-info-section-title enc-info-pro">✓ Strengths</div>
+          <ul className="enc-info-list">
+            {info.pros.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </div>
+
+        <div className="enc-info-section">
+          <div className="enc-info-section-title enc-info-con">✕ Limitations</div>
+          <ul className="enc-info-list">
+            {info.cons.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        </div>
+
+        <div className="enc-info-best">
+          <span className="enc-info-best-label">Best for</span>
+          <span>{info.bestFor}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface AccelOption { id: string; label: string; }
 
 interface QualitySettingsProps {
-  quality:      number;
-  resolution:   string;
-  format:       string;
-  audio:        number;
-  fps:          string;
-  codec:        string;
-  gpuEncoder:   string;
-  accelOptions: AccelOption[];
-  theme:        "light" | "dark";
-  onQuality:    (v: number) => void;
-  onRes:        (v: string) => void;
-  onFmt:        (v: string) => void;
-  onAudio:      (v: number) => void;
-  onFps:        (v: string) => void;
-  onCodec:      (v: string) => void;
-  onGpuEncoder: (v: string) => void;
+  quality:           number;
+  resolution:        string;
+  format:            string;
+  audio:             number;
+  fps:               string;
+  codec:             string;
+  gpuEncoder:        string;
+  accelOptions:      AccelOption[];
+  theme:             "light" | "dark";
+  onQuality:         (v: number) => void;
+  onRes:             (v: string) => void;
+  onFmt:             (v: string) => void;
+  onAudio:           (v: number) => void;
+  onFps:             (v: string) => void;
+  onCodec:           (v: string) => void;
+  onGpuEncoder:      (v: string) => void;
+  onOpenEncoderInfo: () => void;
 }
 function QualitySettings({
   quality, resolution, format, audio, fps, codec, gpuEncoder, accelOptions, theme,
-  onQuality, onRes, onFmt, onAudio, onFps, onCodec, onGpuEncoder,
+  onQuality, onRes, onFmt, onAudio, onFps, onCodec, onGpuEncoder, onOpenEncoderInfo,
 }: QualitySettingsProps) {
   const ql    = qualityInfo(quality);
   const isDark = theme === "dark";
@@ -256,7 +375,18 @@ function QualitySettings({
               <option value="24">24 fps</option>
             </select>
           </div>
-          <div className="setting"><label>Encoder</label>
+          <div className="setting">
+            <label className="setting-label-row">
+              Encoder
+              <button
+                className="enc-info-btn"
+                onClick={onOpenEncoderInfo}
+                title="Learn about encoder differences"
+                aria-label="Encoder information"
+              >
+                <InfoIcon />
+              </button>
+            </label>
             <select value={codec} onChange={e => onCodec(e.target.value)}>
               <option value="h264">H.264</option>
               <option value="h265">H.265 (HEVC)</option>
@@ -336,6 +466,9 @@ export default function App() {
   const [fsImage, setFsImage]       = useState<{src: string; label: string} | null>(null);
   const [status, setStatus]         = useState("");
   const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
+
+  // Encoder info modal
+  const [encoderInfoOpen, setEncoderInfoOpen] = useState(false);
 
   // Video editor state (single-clip)
   const [showEditor, setShowEditor] = useState(false);
@@ -768,6 +901,14 @@ export default function App() {
   return (
     <div className="app">
 
+      {/* ── ENCODER INFO MODAL ── */}
+      {encoderInfoOpen && (
+        <EncoderInfoModal
+          codec={codec}
+          onClose={() => setEncoderInfoOpen(false)}
+        />
+      )}
+
       {/* ── BATCH PER-CLIP EDITOR OVERLAY ── */}
       {editingBatchIdx >= 0 && batchEditInfo && (() => {
         const clipFile = batchFiles[editingBatchIdx];
@@ -982,6 +1123,7 @@ export default function App() {
                 codec={codec} gpuEncoder={gpuEncoder} accelOptions={accelOptions} theme={theme}
                 onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
                 onCodec={setCodec} onGpuEncoder={setGpuEncoder}
+                onOpenEncoderInfo={() => setEncoderInfoOpen(true)}
               />
             </div>
             <div className="batch-actions">
@@ -1095,6 +1237,7 @@ export default function App() {
               codec={codec} gpuEncoder={gpuEncoder} accelOptions={accelOptions} theme={theme}
               onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
               onCodec={setCodec} onGpuEncoder={setGpuEncoder}
+              onOpenEncoderInfo={() => setEncoderInfoOpen(true)}
             />
           </div>
 
