@@ -142,9 +142,22 @@ fn test_nvenc_codec(ffmpeg: &std::path::Path, encoder: &str) -> bool {
 /// NVENC uses a stricter cuda-device-backed test (test_nvenc_codec) to avoid
 /// false positives on Pascal GPUs (GTX 10xx) where av1_nvenc / hevc_nvenc
 /// appear in the encoder list but lack hardware support.
+///
+/// NOTE: This command is async and runs on a blocking thread pool so it does
+/// NOT freeze the Tauri main thread / UI during startup. The test encodes can
+/// take up to a second each on a cold GPU; without spawn_blocking the app would
+/// visibly lag/freeze while probing.
 #[tauri::command]
-pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
-    let ffmpeg = match resolve_bin(&app, "ffmpeg") {
+pub async fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        probe_gpu_encoders_sync(&app)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+fn probe_gpu_encoders_sync(app: &tauri::AppHandle) -> Vec<GpuEncoderInfo> {
+    let ffmpeg = match resolve_bin(app, "ffmpeg") {
         Ok(p) => p,
         Err(_) => return vec![],
     };
