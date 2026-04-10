@@ -117,6 +117,9 @@ const ENCODER_INFO: Record<string, EncoderInfo> = {
   },
 };
 
+// Ordered list of codec keys for the modal
+const ENCODER_ORDER = ["h264", "h265", "av1"] as const;
+
 function fmtTime(s: number) {
   const h   = Math.floor(s / 3600);
   const m   = Math.floor((s % 3600) / 60);
@@ -245,15 +248,11 @@ function ThemeBtn({ theme, onToggle }: ThemeBtnProps) {
   );
 }
 
-// ── Encoder Info Modal ────────────────────────────────────
+// ── Encoder Info Modal — shows ALL encoders as a scrollable list ──
 interface EncoderInfoModalProps {
-  codec: string;
   onClose: () => void;
 }
-function EncoderInfoModal({ codec, onClose }: EncoderInfoModalProps) {
-  const info = ENCODER_INFO[codec];
-  if (!info) return null;
-
+function EncoderInfoModal({ onClose }: EncoderInfoModalProps) {
   // Close on Escape key
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -262,33 +261,49 @@ function EncoderInfoModal({ codec, onClose }: EncoderInfoModalProps) {
   }, [onClose]);
 
   return (
-    <div className="enc-info-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label={`${info.name} information`}>
+    <div className="enc-info-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Encoder information">
       <div className="enc-info-modal" onClick={e => e.stopPropagation()}>
-        <div className="enc-info-header">
-          <div>
-            <div className="enc-info-name">{info.name}</div>
-            <div className="enc-info-tagline">{info.tagline}</div>
-          </div>
+        <div className="enc-info-modal-header">
+          <span className="enc-info-modal-title">Encoder Guide</span>
           <button className="enc-info-close" onClick={onClose} aria-label="Close">&times;</button>
         </div>
 
-        <div className="enc-info-section">
-          <div className="enc-info-section-title enc-info-pro">✓ Strengths</div>
-          <ul className="enc-info-list">
-            {info.pros.map((p, i) => <li key={i}>{p}</li>)}
-          </ul>
-        </div>
+        <div className="enc-info-list-scroll">
+          {ENCODER_ORDER.map((key, idx) => {
+            const info = ENCODER_INFO[key];
+            return (
+              <div key={key}>
+                {idx > 0 && <div className="enc-info-divider" />}
+                <div className="enc-info-card">
+                  <div className="enc-info-card-header">
+                    <div>
+                      <div className="enc-info-name">{info.name}</div>
+                      <div className="enc-info-tagline">{info.tagline}</div>
+                    </div>
+                  </div>
 
-        <div className="enc-info-section">
-          <div className="enc-info-section-title enc-info-con">✕ Limitations</div>
-          <ul className="enc-info-list">
-            {info.cons.map((c, i) => <li key={i}>{c}</li>)}
-          </ul>
-        </div>
+                  <div className="enc-info-section">
+                    <div className="enc-info-section-title enc-info-pro">✓ Strengths</div>
+                    <ul className="enc-info-items">
+                      {info.pros.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  </div>
 
-        <div className="enc-info-best">
-          <span className="enc-info-best-label">Best for</span>
-          <span>{info.bestFor}</span>
+                  <div className="enc-info-section">
+                    <div className="enc-info-section-title enc-info-con">✕ Limitations</div>
+                    <ul className="enc-info-items">
+                      {info.cons.map((c, i) => <li key={i}>{c}</li>)}
+                    </ul>
+                  </div>
+
+                  <div className="enc-info-best">
+                    <span className="enc-info-best-label">Best for</span>
+                    <span>{info.bestFor}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -904,7 +919,6 @@ export default function App() {
       {/* ── ENCODER INFO MODAL ── */}
       {encoderInfoOpen && (
         <EncoderInfoModal
-          codec={codec}
           onClose={() => setEncoderInfoOpen(false)}
         />
       )}
