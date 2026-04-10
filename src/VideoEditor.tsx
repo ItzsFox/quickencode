@@ -407,7 +407,7 @@ export default function VideoEditor({ filePath, info, theme, initialEdits, onCon
                     checked={mergeAudio}
                     onChange={e => setMergeAudio(e.target.checked)}
                   />
-                  Merge tracks
+                  <span className="veditor-merge-text">Merge tracks</span>
                 </label>
               )}
             </div>
