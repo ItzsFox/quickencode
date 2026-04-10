@@ -74,7 +74,34 @@ pub struct GpuEncoderInfo {
     pub supported_codecs: Vec<String>, // subset of ["h264", "h265", "av1"]
 }
 
+/// Test whether a specific ffmpeg encoder actually works on this machine by
+/// attempting to encode a single synthetic frame to null output. This is more
+/// reliable than checking encoder names because some encoders (e.g. av1_nvenc,
+/// hevc_nvenc) appear in `ffmpeg -encoders` even on GPUs that don't support
+/// them in hardware (e.g. GTX 10xx series has no AV1/HEVC NVENC).
+fn test_encoder(ffmpeg: &std::path::Path, encoder: &str) -> bool {
+    let status = Command::new(ffmpeg)
+        .args([
+            "-f", "lavfi", "-i", "color=black:s=64x64:r=1",
+            "-vframes", "1",
+            "-c:v", encoder,
+            "-f", "null",
+            #[cfg(target_os = "windows")] "NUL",
+            #[cfg(not(target_os = "windows"))] "/dev/null",
+        ])
+        .no_window()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    matches!(status, Ok(s) if s.success())
+}
+
 /// Probe ffmpeg to see which GPU encoders are actually available on this machine.
+/// Uses a two-step approach:
+///   1. Check ffmpeg -encoders to see which encoder names are compiled in.
+///   2. For each candidate, run a 1-frame test encode to confirm the GPU
+///      actually supports it at runtime (encoder names can appear even on
+///      incompatible hardware).
 #[tauri::command]
 pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
     let ffmpeg = match resolve_bin(&app, "ffmpeg") {
@@ -95,53 +122,84 @@ pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
     let mut result = vec![];
 
     // NVENC — NVIDIA
+    // Test each codec individually: GTX 10xx has h264_nvenc but NOT hevc_nvenc
+    // or av1_nvenc at the hardware level, even if they appear in -encoders.
     if stdout.contains("h264_nvenc") || stdout.contains("hevc_nvenc") || stdout.contains("av1_nvenc") {
         let mut codecs = vec![];
-        if stdout.contains("h264_nvenc")  { codecs.push("h264".to_string()); }
-        if stdout.contains("hevc_nvenc")  { codecs.push("h265".to_string()); }
-        if stdout.contains("av1_nvenc")   { codecs.push("av1".to_string()); }
-        result.push(GpuEncoderInfo {
-            id:               "nvenc".into(),
-            label:            "NVIDIA NVENC".into(),
-            supported_codecs: codecs,
-        });
+        if stdout.contains("h264_nvenc") && test_encoder(&ffmpeg, "h264_nvenc") {
+            codecs.push("h264".to_string());
+        }
+        if stdout.contains("hevc_nvenc") && test_encoder(&ffmpeg, "hevc_nvenc") {
+            codecs.push("h265".to_string());
+        }
+        if stdout.contains("av1_nvenc") && test_encoder(&ffmpeg, "av1_nvenc") {
+            codecs.push("av1".to_string());
+        }
+        if !codecs.is_empty() {
+            result.push(GpuEncoderInfo {
+                id:               "nvenc".into(),
+                label:            "NVIDIA NVENC".into(),
+                supported_codecs: codecs,
+            });
+        }
     }
 
     // QuickSync — Intel iGPU / Arc
+    // AV1 QSV requires Arc (Alchemist) or 12th-gen+ iGPU; test individually.
     if stdout.contains("h264_qsv") || stdout.contains("hevc_qsv") || stdout.contains("av1_qsv") {
         let mut codecs = vec![];
-        if stdout.contains("h264_qsv")  { codecs.push("h264".to_string()); }
-        if stdout.contains("hevc_qsv")  { codecs.push("h265".to_string()); }
-        if stdout.contains("av1_qsv")   { codecs.push("av1".to_string()); }
-        result.push(GpuEncoderInfo {
-            id:               "qsv".into(),
-            label:            "Intel QuickSync".into(),
-            supported_codecs: codecs,
-        });
+        if stdout.contains("h264_qsv") && test_encoder(&ffmpeg, "h264_qsv") {
+            codecs.push("h264".to_string());
+        }
+        if stdout.contains("hevc_qsv") && test_encoder(&ffmpeg, "hevc_qsv") {
+            codecs.push("h265".to_string());
+        }
+        if stdout.contains("av1_qsv") && test_encoder(&ffmpeg, "av1_qsv") {
+            codecs.push("av1".to_string());
+        }
+        if !codecs.is_empty() {
+            result.push(GpuEncoderInfo {
+                id:               "qsv".into(),
+                label:            "Intel QuickSync".into(),
+                supported_codecs: codecs,
+            });
+        }
     }
 
-    // AMF — AMD (no AV1 in most ffmpeg builds)
+    // AMF — AMD (no AV1 in most ffmpeg builds; no test needed for av1_amf)
     if stdout.contains("h264_amf") || stdout.contains("hevc_amf") {
         let mut codecs = vec![];
-        if stdout.contains("h264_amf") { codecs.push("h264".to_string()); }
-        if stdout.contains("hevc_amf") { codecs.push("h265".to_string()); }
-        result.push(GpuEncoderInfo {
-            id:               "amf".into(),
-            label:            "AMD AMF".into(),
-            supported_codecs: codecs,
-        });
+        if stdout.contains("h264_amf") && test_encoder(&ffmpeg, "h264_amf") {
+            codecs.push("h264".to_string());
+        }
+        if stdout.contains("hevc_amf") && test_encoder(&ffmpeg, "hevc_amf") {
+            codecs.push("h265".to_string());
+        }
+        if !codecs.is_empty() {
+            result.push(GpuEncoderInfo {
+                id:               "amf".into(),
+                label:            "AMD AMF".into(),
+                supported_codecs: codecs,
+            });
+        }
     }
 
     // VideoToolbox — macOS
     if stdout.contains("h264_videotoolbox") || stdout.contains("hevc_videotoolbox") {
         let mut codecs = vec![];
-        if stdout.contains("h264_videotoolbox") { codecs.push("h264".to_string()); }
-        if stdout.contains("hevc_videotoolbox") { codecs.push("h265".to_string()); }
-        result.push(GpuEncoderInfo {
-            id:               "videotoolbox".into(),
-            label:            "Apple VideoToolbox".into(),
-            supported_codecs: codecs,
-        });
+        if stdout.contains("h264_videotoolbox") && test_encoder(&ffmpeg, "h264_videotoolbox") {
+            codecs.push("h264".to_string());
+        }
+        if stdout.contains("hevc_videotoolbox") && test_encoder(&ffmpeg, "hevc_videotoolbox") {
+            codecs.push("h265".to_string());
+        }
+        if !codecs.is_empty() {
+            result.push(GpuEncoderInfo {
+                id:               "videotoolbox".into(),
+                label:            "Apple VideoToolbox".into(),
+                supported_codecs: codecs,
+            });
+        }
     }
 
     result
