@@ -497,7 +497,7 @@ fn build_audio_args(
         for (out_idx, &ai) in active_audio.iter().enumerate() {
             let vol_pct = volume_map.get(&ai).copied().unwrap_or(100);
             let vol_f   = vol_pct as f64 / 100.0;
-            if (vol_pct - 100).unsigned_abs() > 0 {
+            if vol_pct != 100 {
                 let label = format!("av{out_idx}");
                 filter_parts.push(format!("[0:a:{ai}]volume={vol_f:.4}[{label}]"));
                 amix_inputs.push_str(&format!("[{label}]"));
