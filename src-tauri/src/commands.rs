@@ -96,12 +96,44 @@ fn test_encoder(ffmpeg: &std::path::Path, encoder: &str) -> bool {
     matches!(status, Ok(s) if s.success())
 }
 
+/// Stricter NVENC capability test that forces CUDA hardware device initialisation.
+/// The plain test_encoder() is a false positive on Pascal GPUs (GTX 10xx):
+/// av1_nvenc and sometimes hevc_nvenc exit 0 on a 64×64 synthetic encode but
+/// fail immediately on real content (exit -542398553 / 0xDFFFFFEB).
+///
+/// This variant uses `-init_hw_device cuda=gpu` which makes the NVENC driver
+/// actually allocate a hardware session, correctly returning non-zero on GPUs
+/// that lack the required encode engine (HEVC needs Maxwell+, AV1 needs Ada).
+fn test_nvenc_codec(ffmpeg: &std::path::Path, encoder: &str) -> bool {
+    let status = Command::new(ffmpeg)
+        .args([
+            "-hide_banner",
+            "-init_hw_device", "cuda=gpu:0",
+            "-f", "lavfi", "-i", "color=black:s=64x64:r=1",
+            "-vframes", "1",
+            "-c:v", encoder,
+            "-gpu", "0",
+            "-f", "null",
+            #[cfg(target_os = "windows")] "NUL",
+            #[cfg(not(target_os = "windows"))] "/dev/null",
+        ])
+        .no_window()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    matches!(status, Ok(s) if s.success())
+}
+
 /// Probe ffmpeg to see which GPU encoders are actually available on this machine.
 /// Uses a two-step approach:
 ///   1. Check ffmpeg -encoders to see which encoder names are compiled in.
 ///   2. For each candidate, run a 1-frame test encode to confirm the GPU
 ///      actually supports it at runtime (encoder names can appear even on
 ///      incompatible hardware).
+///
+/// NVENC uses a stricter cuda-device-backed test (test_nvenc_codec) to avoid
+/// false positives on Pascal GPUs (GTX 10xx) where av1_nvenc / hevc_nvenc
+/// appear in the encoder list but lack hardware support.
 #[tauri::command]
 pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
     let ffmpeg = match resolve_bin(&app, "ffmpeg") {
@@ -122,17 +154,19 @@ pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
     let mut result = vec![];
 
     // NVENC — NVIDIA
-    // Test each codec individually: GTX 10xx has h264_nvenc but NOT hevc_nvenc
-    // or av1_nvenc at the hardware level, even if they appear in -encoders.
+    // Use test_nvenc_codec (stricter) instead of test_encoder for all NVENC paths.
+    // GTX 10xx (Pascal): h264_nvenc works, hevc_nvenc and av1_nvenc do NOT.
+    // RTX 20xx/30xx (Turing/Ampere): h264 + hevc work, av1 does NOT.
+    // RTX 40xx+ (Ada Lovelace): all three work.
     if stdout.contains("h264_nvenc") || stdout.contains("hevc_nvenc") || stdout.contains("av1_nvenc") {
         let mut codecs = vec![];
-        if stdout.contains("h264_nvenc") && test_encoder(&ffmpeg, "h264_nvenc") {
+        if stdout.contains("h264_nvenc") && test_nvenc_codec(&ffmpeg, "h264_nvenc") {
             codecs.push("h264".to_string());
         }
-        if stdout.contains("hevc_nvenc") && test_encoder(&ffmpeg, "hevc_nvenc") {
+        if stdout.contains("hevc_nvenc") && test_nvenc_codec(&ffmpeg, "hevc_nvenc") {
             codecs.push("h265".to_string());
         }
-        if stdout.contains("av1_nvenc") && test_encoder(&ffmpeg, "av1_nvenc") {
+        if stdout.contains("av1_nvenc") && test_nvenc_codec(&ffmpeg, "av1_nvenc") {
             codecs.push("av1".to_string());
         }
         if !codecs.is_empty() {
