@@ -223,49 +223,55 @@ function QualitySettings({
           style={{ background: bg(quality, 5, 100) }}
           onChange={e => onQuality(Number(e.target.value))}
         />
-        <div className="range-labels"><span>Smallest</span><span>Best</span></div>
+        <div className="range-labels"><span>Low</span><span>High</span></div>
       </div>
-      <div className="settings-divider" />
+
       <div className="options-col">
         <div className="options-grid">
-          <div className="setting"><label>Resolution</label>
+          <div className="setting">
+            <label>Resolution</label>
             <select value={resolution} onChange={e => onRes(e.target.value)}>
-              <option value="original">Original</option>
-              <option value="1080p">1080p</option>
-              <option value="720p">720p</option>
-              <option value="480p">480p</option>
+              <option>1080p</option>
+              <option>720p</option>
+              <option>480p</option>
+              <option>Original</option>
             </select>
           </div>
-          <div className="setting"><label>Format</label>
+          <div className="setting">
+            <label>Format</label>
             <select value={format} onChange={e => onFmt(e.target.value)}>
-              <option value="mp4">MP4</option>
-              <option value="mkv">MKV</option>
-              <option value="webm">WebM</option>
+              <option>mp4</option>
+              <option>mkv</option>
+              <option>webm</option>
             </select>
           </div>
-          <div className="setting"><label>Audio</label>
+          <div className="setting">
+            <label>Audio kbps</label>
             <select value={audio} onChange={e => onAudio(Number(e.target.value))}>
-              <option value={64}>64 kbps</option>
-              <option value={128}>128 kbps</option>
-              <option value={192}>192 kbps</option>
-              <option value={256}>256 kbps</option>
+              <option value={64}>64</option>
+              <option value={96}>96</option>
+              <option value={128}>128</option>
+              <option value={192}>192</option>
+              <option value={320}>320</option>
             </select>
           </div>
-          <div className="setting"><label>FPS</label>
+          <div className="setting">
+            <label>Frame rate</label>
             <select value={fps} onChange={e => onFps(e.target.value)}>
-              <option value="original">Original</option>
-              <option value="60">60 fps</option>
-              <option value="30">30 fps</option>
-              <option value="24">24 fps</option>
+              <option>Original</option>
+              <option>60</option>
+              <option>30</option>
+              <option>24</option>
             </select>
           </div>
         </div>
+
+        {/* AV1 toggle */}
         <div className="av1-toggle-row">
-          {/* AV1 checkbox */}
-          <label className="av1-toggle" htmlFor="av1-checkbox"
+          <label
+            className="av1-toggle"
             title="Uses SVT-AV1 encoder — better quality at the same file size, but slower to encode than H.264">
             <input
-              id="av1-checkbox"
               type="checkbox"
               checked={useAv1}
               onChange={e => {
@@ -287,17 +293,42 @@ function QualitySettings({
                 className="gpu-select"
                 value={gpuEncoder}
                 onChange={e => onGpuEncoder(e.target.value)}
-                title="Select GPU acceleration backend. CPU uses software encoding (2-pass for H.264, single-pass for AV1)."
               >
                 {gpuSelectOptions.map(o => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
-              {gpuEncoder !== "cpu" && (
-                <span className="av1-slow-badge gpu-badge">
-                  {gpuOptions.find(g => g.id === gpuEncoder)?.label ?? gpuEncoder.toUpperCase()}
-                </span>
-              )}
+              <button className="gpu-info-btn" aria-label="GPU encoder info" tabIndex={0}>
+                i
+                <div className="gpu-tooltip">
+                  <div className="gpu-tooltip-title">
+                    {gpuEncoder === "cpu"           ? "CPU (Software)"
+                    : gpuEncoder === "nvenc"        ? "NVIDIA NVENC"
+                    : gpuEncoder === "qsv"          ? "Intel Quick Sync (QSV)"
+                    : gpuEncoder === "amf"          ? "AMD AMF"
+                    : gpuEncoder === "videotoolbox" ? "Apple VideoToolbox"
+                    : (gpuOptions.find(g => g.id === gpuEncoder)?.label ?? gpuEncoder.toUpperCase())}
+                  </div>
+                  <div className="gpu-tooltip-desc">
+                    {gpuEncoder === "cpu"
+                      ? "Uses your processor to encode — most compatible and highest quality, but the slowest option."
+                    : gpuEncoder === "nvenc"
+                      ? "NVIDIA GPU hardware encoder. Very fast with low CPU usage, great for NVIDIA GeForce / RTX cards (Maxwell or newer)."
+                    : gpuEncoder === "qsv"
+                      ? "Intel Quick Sync Video — hardware encoder built into Intel CPUs and iGPUs. Fast and efficient."
+                    : gpuEncoder === "amf"
+                      ? "AMD Advanced Media Framework — hardware encoder on AMD Radeon GPUs. Fast with low CPU usage."
+                    : gpuEncoder === "videotoolbox"
+                      ? "Apple hardware encoder available on all Macs. Very fast with excellent efficiency on M-series chips."
+                      : "Hardware-accelerated GPU encoder. Faster than CPU but may have slightly lower quality at the same bitrate."}
+                  </div>
+                  <div className="gpu-tooltip-note">
+                    {gpuEncoder === "cpu"
+                      ? "H.264: 2-pass encoding for best quality. AV1: single-pass SVT-AV1."
+                      : "Single-pass encoding. GPU encoders are faster but CPU (2-pass) often produces slightly smaller files at the same quality."}
+                  </div>
+                </div>
+              </button>
             </div>
           )}
         </div>
@@ -308,898 +339,743 @@ function QualitySettings({
 
 // ─────────────────────────────────────────────────────────
 const CancelIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <line x1="18" y1="6" x2="6" y2="18" />
-    <line x1="6" y1="6" x2="18" y2="18" />
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
   </svg>
 );
 
-// ─────────────────────────────────────────────────────────
-// MAIN APP
-// ─────────────────────────────────────────────────────────
 export default function App() {
-  const initTheme = (): "light" | "dark" => {
-    try { return (localStorage.getItem("qe_theme") as "light" | "dark") ?? "light"; }
-    catch { return "light"; }
-  };
-  const [theme, setThemeState] = useState<"light" | "dark">(initTheme);
+  const [screen, setScreen]           = useState<Screen>("drop");
+  const [theme,  setTheme]            = useState<"light" | "dark">(() =>
+    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+  );
+  const [videoPath, setVideoPath]     = useState("");
+  const [videoInfo, setVideoInfo]     = useState<VideoInfo | null>(null);
+  const [quality,   setQuality]       = useState(75);
+  const [resolution,setResolution]    = useState("Original");
+  const [format,    setFormat]        = useState("mp4");
+  const [audio,     setAudio]         = useState(128);
+  const [fps,       setFps]           = useState("Original");
+  const [useAv1,    setUseAv1]        = useState(false);
+  // gpuEncoder: "cpu" = software, or "nvenc" / "qsv" / "amf" / "videotoolbox"
+  const [gpuEncoder, setGpuEncoder]   = useState("cpu");
+  // gpuOptions: populated on mount via probe_gpu_encoders
+  const [gpuOptions, setGpuOptions]   = useState<GpuEncoderInfo[]>([]);
+  const [encFrames,  setEncFrames]    = useState<Record<number, string>>({});
+  const [origFrames, setOrigFrames]   = useState<Record<number, string>>({});
+  const [frameIdx,   setFrameIdx]     = useState(0);
+  const [progress,   setProgress]     = useState(0);
+  const [eta,        setEta]          = useState(0);
+  const [passNum,    setPassNum]      = useState(1);
+  const [doneResult, setDoneResult]   = useState<DoneResult | null>(null);
+  const [batchFiles, setBatchFiles]   = useState<BatchFile[]>([]);
+  const [batchDone,  setBatchDone]    = useState<BatchDoneResult | null>(null);
+  const [dragOver,   setDragOver]     = useState(false);
+  const [edits,      setEdits]        = useState<VideoEdits | null>(null);
+  const [showEditor, setShowEditor]   = useState(false);
+  const [batchEditIdx, setBatchEditIdx] = useState<number | null>(null);
+  const [fullscreenImg, setFullscreenImg] = useState<{ src: string; label: string } | null>(null);
 
+  // ── Theme application ──────────────────────────────────
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-    try { localStorage.setItem("qe_theme", theme); } catch {}
   }, [theme]);
-  useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, []);
 
-  const toggleTheme = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setThemeState(t => t === "light" ? "dark" : "light");
-  };
-
-  const [screen, setScreen]         = useState<Screen>("drop");
-  const [filePath, setFilePath]     = useState("");
-  const [info, setInfo]             = useState<VideoInfo | null>(null);
-  const [dragOver, setDragOver]     = useState(false);
-  const [origFrames, setOrigFrames] = useState<string[]>([]);
-  const [encFrames, setEncFrames]   = useState<Record<number, string>>({});
-  const [encLoading, setEncLoading] = useState(false);
-  const [frameIdx, setFrameIdx]     = useState(0);
-  const [resolution, setRes]        = useState("original");
-  const [format, setFmt]            = useState("mp4");
-  const [quality, setQuality]       = useState(75);
-  const [audio, setAudio]           = useState(128);
-  const [fps, setFps]               = useState("original");
-  const [useAv1, setUseAv1]         = useState(false);
-  // gpuEncoder: "cpu" = software, or "nvenc" / "qsv" / "amf" / "videotoolbox"
-  const [gpuEncoder, setGpuEncoder] = useState("cpu");
-  // gpuOptions: populated on mount via probe_gpu_encoders
-  const [gpuOptions, setGpuOptions] = useState<GpuEncoderInfo[]>([]);
-  const [encoding, setEncoding]     = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [progress, setProgress]     = useState<EncodeProgress | null>(null);
-  const [fsImage, setFsImage]       = useState<{src: string; label: string} | null>(null);
-  const [status, setStatus]         = useState("");
-  const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
-
-  // Video editor state (single-clip)
-  const [showEditor, setShowEditor] = useState(false);
-  const [videoEdits, setVideoEdits] = useState<VideoEdits | null>(null);
-
-  const [batchFiles, setBatchFiles]           = useState<BatchFile[]>([]);
-  const [batchProgress, setBatchProgress]     = useState<{idx: number; enc: EncodeProgress; currentFile: string} | null>(null);
-  const [batchRunning, setBatchRunning]       = useState(false);
-  const [batchDoneResult, setBatchDoneResult] = useState<BatchDoneResult | null>(null);
-
-  // Batch per-clip editor state
-  const [editingBatchIdx, setEditingBatchIdx] = useState<number>(-1);
-  const [batchEditInfo, setBatchEditInfo]     = useState<VideoInfo | null>(null);
-
-  const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (encDebounce.current) clearTimeout(encDebounce.current);
-    };
-  }, []);
-
-  // Probe available GPU encoders on mount
+  // ── GPU encoder probe on mount ─────────────────────────
   useEffect(() => {
     invoke<GpuEncoderInfo[]>("probe_gpu_encoders")
-      .then(detected => {
-        if (!mountedRef.current) return;
-        setGpuOptions(detected);
-        // Auto-select the first GPU found
-        if (detected.length > 0) {
-          setGpuEncoder(detected[0].id);
+      .then(gpus => {
+        setGpuOptions(gpus);
+        if (gpus.length > 0) {
+          // Auto-select the first GPU found
+          setGpuEncoder(gpus[0].id);
         }
       })
       .catch(() => { /* no GPU info — stay on cpu */ });
   }, []);
 
-  const base    = resolution === "original" ? (info?.bitrate_kbps ?? 5000) : RES_BITRATES[resolution];
-  const videoBr = Math.max(Math.round(base * (quality / 100)), 80);
-  const trimRatio = (info && videoEdits)
-    ? (videoEdits.trimEnd - videoEdits.trimStart) / info.duration_secs
-    : 1;
-  const estMb   = info ? ((videoBr + audio) * info.duration_secs) / 8 / 1024 * trimRatio : 0;
-  const estLow  = estMb * 0.85;
-  const estHigh = estMb * 1.15;
-  const reduction = info ? Math.round((1 - estMb / (info.size_mb * trimRatio + 0.001)) * 100) : 0;
-
-  const loadEncodedFrame = useCallback((
-    idx: number, vbr: number, res: string, f: string, av1: boolean, gpu: string
-  ) => {
-    if (!filePath || !info) return;
-    if (encDebounce.current) clearTimeout(encDebounce.current);
-    setEncLoading(true);
-    encDebounce.current = setTimeout(async () => {
-      const ts = frameTs(idx, info.duration_secs);
+  // ── Frame loader ───────────────────────────────────────
+  const loadEncodedFrame = useCallback(
+    async (
+      idx: number, vbr: number, res: string, f: string, av1: boolean, gpu: string
+    ) => {
       try {
-        const result = await invoke<string>("get_encoded_frame", {
-          input: filePath, timestamp: ts, resolution: res,
+        const dataUrl = await invoke<string>("encode_preview_frame", {
+          path: videoPath, timestamp: frameTs(idx, videoInfo?.duration_secs ?? 1),
           videoBitrateKbps: vbr, fps: f, useAv1: av1, gpuEncoder: gpu,
+          resolution: res, format: f,
         });
-        if (mountedRef.current) setEncFrames(prev => ({ ...prev, [idx]: result }));
-      } catch (e) {
-        if (mountedRef.current) setStatus(`Preview failed: ${e}`);
-      } finally {
-        if (mountedRef.current) setEncLoading(false);
-      }
-    }, 600);
-  }, [filePath, info]);
+        setEncFrames(prev => ({ ...prev, [idx]: dataUrl }));
+      } catch { /* ignore */ }
+    },
+    [videoPath, videoInfo]
+  );
 
+  // Re-load current frame when settings change
   useEffect(() => {
-    if (screen !== "editor" || !info) return;
+    if (screen !== "editor" || !videoInfo) return;
+    const vbr = resolution === "Original"
+      ? Math.round(videoInfo.bitrate_kbps * (quality / 100))
+      : Math.round((RES_BITRATES[resolution] ?? 2500) * (quality / 100));
     setEncFrames({});
-    loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1, gpuEncoder);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoBr, resolution, fps, useAv1, gpuEncoder, screen]);
+    loadEncodedFrame(frameIdx, vbr, resolution, fps, useAv1, gpuEncoder);
+  }, [resolution, quality, fps, useAv1, gpuEncoder, loadEncodedFrame]);
 
+  // Pre-load adjacent frames on idle
   useEffect(() => {
-    if (screen !== "editor" || !info) return;
-    if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, videoBr, resolution, fps, useAv1, gpuEncoder);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (screen !== "editor" || !videoInfo) return;
+    const vbr = resolution === "Original"
+      ? Math.round(videoInfo.bitrate_kbps * (quality / 100))
+      : Math.round((RES_BITRATES[resolution] ?? 2500) * (quality / 100));
+    if (!encFrames[frameIdx]) loadEncodedFrame(frameIdx, vbr, resolution, fps, useAv1, gpuEncoder);
   }, [frameIdx]);
 
-  const loadFile = useCallback(async (path: string) => {
+  const videoBr = videoInfo
+    ? resolution === "Original"
+      ? Math.round(videoInfo.bitrate_kbps * (quality / 100))
+      : Math.round((RES_BITRATES[resolution] ?? 2500) * (quality / 100))
+    : 0;
+
+  // ── File open ──────────────────────────────────────────
+  const openFile = useCallback(async (path?: string) => {
+    const p = path ?? await open({ filters: [{ name: "Video", extensions: [...VIDEO_EXTS] }] });
+    if (!p || typeof p !== "string") return;
     setScreen("loading");
-    setFilePath(path);
-    setOrigFrames([]);
+    setVideoPath(p);
     setEncFrames({});
-    setFrameIdx(0);
-    setStatus("");
-    setDoneResult(null);
-    setVideoEdits(null);
+    setOrigFrames({});
+    setEdits(null);
     try {
-      const [videoInfo, frames] = await Promise.all([
-        invoke<VideoInfo>("get_video_info", { input: path }),
-        invoke<string[]>("get_video_frames", { input: path, count: FRAME_COUNT }),
-      ]);
-      setInfo(videoInfo);
-      setOrigFrames(frames);
-      setScreen("editor");
-      const b = resolution === "original" ? videoInfo.bitrate_kbps : (RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps);
-      const vbr = Math.max(Math.round(b * (quality / 100)), 80);
+      const info = await invoke<VideoInfo>("get_video_info", { path: p });
+      setVideoInfo(info);
+      const vbr = resolution === "Original"
+        ? Math.round(info.bitrate_kbps * (quality / 100))
+        : Math.round((RES_BITRATES[resolution] ?? 2500) * (quality / 100));
       loadEncodedFrame(0, vbr, resolution, fps, useAv1, gpuEncoder);
+      setScreen("editor");
     } catch (e) {
-      setStatus(`❌ ${e}`);
+      alert(`Failed to load video: ${e}`);
       setScreen("drop");
     }
   }, [resolution, quality, fps, useAv1, gpuEncoder, loadEncodedFrame]);
 
-  const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
-    const videos: string[] = [];
-    for (const p of paths) {
-      if (isVideo(p)) {
-        videos.push(p);
-      } else {
-        try {
-          const found = await invoke<string[]>("scan_folder_for_videos", { folder: p });
-          videos.push(...found);
-        } catch { /* skip */ }
-      }
-    }
-    return videos;
-  }, []);
+  // ── Encode ─────────────────────────────────────────────
+  const runEncode = useCallback(async (
+    vbr: number, audioBr: number, res: string, f: string,
+    outPath?: string, av1Override?: boolean, gpuOverride?: string
+  ) => {
+    const encodeWithAv1 = av1Override ?? useAv1;
+    const encodeWithGpu = gpuOverride ?? gpuEncoder;
+    const out = outPath ?? await save({
+      defaultPath: videoPath.replace(/\.[^.]+$/, `_encoded.${format}`),
+      filters: [{ name: "Video", extensions: [format] }],
+    });
+    if (!out) return;
 
+    setProgress(0); setEta(0); setPassNum(1);
+    setScreen("loading");
+
+    const unlisten = await listen<EncodeProgress>("encode_progress", e => {
+      setProgress(e.payload.percent);
+      setEta(e.payload.eta_secs);
+      setPassNum(e.payload.pass);
+    });
+
+    try {
+      const result = await invoke<DoneResult>("encode_video", {
+        path:             videoPath,
+        outputPath:       out,
+        videoBitrateKbps: vbr,
+        audioBitrateKbps: audioBr,
+        resolution:       res,
+        format:           f,
+        fps:              fps,
+        useAv1:           encodeWithAv1,
+        gpuEncoder:       encodeWithGpu,
+        edits:            edits ?? undefined,
+      });
+      setDoneResult(result);
+      setScreen("done");
+    } catch (e) {
+      if (`${e}`.includes("cancelled")) { setScreen("editor"); }
+      else { alert(`Encode failed: ${e}`); setScreen("editor"); }
+    } finally { unlisten(); }
+  }, [videoPath, format, fps, useAv1, gpuEncoder, edits]);
+
+  const handleEncode = useCallback(() => {
+    runEncode(videoBr, audio, resolution, format);
+  }, [videoBr, audio, resolution, format, runEncode]);
+
+  const handleDiscordEncode = useCallback(() => {
+    if (!videoInfo) return;
+    runEncode(discordBr(videoInfo.duration_secs), DISCORD_AUDIO, resolution, fps, undefined, useAv1, gpuEncoder);
+  }, [videoInfo, resolution, fps, useAv1, gpuEncoder, runEncode]);
+
+  // ── Batch encode ───────────────────────────────────────
+  const runBatchEncode = useCallback(async () => {
+    if (batchFiles.length === 0) return;
+    const dir = await save({ title: "Choose output folder name", defaultPath: "encoded_batch" });
+    if (!dir) return;
+
+    setScreen("loading");
+    setProgress(0); setEta(0); setPassNum(1);
+
+    const unlisten = await listen<EncodeProgress>("encode_progress", e => {
+      setProgress(e.payload.percent);
+      setEta(e.payload.eta_secs);
+      setPassNum(e.payload.pass);
+    });
+
+    try {
+      const result = await invoke<BatchDoneResult>("encode_batch", {
+        files: batchFiles.map(f => ({
+          path:  f.path,
+          edits: f.edits ?? undefined,
+        })),
+        outputDir:        dir,
+        videoBitrateKbps: videoBr,
+        audioBitrateKbps: audio,
+        resolution,
+        format,
+        fps,
+        useAv1,
+        gpuEncoder,
+      });
+      setBatchDone(result);
+      setScreen("batch-done");
+    } catch (e) {
+      if (`${e}`.includes("cancelled")) { setScreen("batch"); }
+      else { alert(`Batch encode failed: ${e}`); setScreen("batch"); }
+    } finally { unlisten(); }
+  }, [batchFiles, videoBr, audio, resolution, format, fps, useAv1, gpuEncoder]);
+
+  // ── Drop / drag ────────────────────────────────────────
   useEffect(() => {
-    let off: (() => void) | undefined;
-    getCurrentWebview().onDragDropEvent(async (ev) => {
-      const t = ev.payload.type;
-      if (t === "over")  setDragOver(true);
-      if (t === "leave") setDragOver(false);
-      if (t === "drop") {
-        setDragOver(false);
-        const dropPayload = ev.payload as { type: "drop"; paths: string[] };
-        const raw = dropPayload.paths;
-        if (!raw?.length) return;
-        const resolved = await resolveDroppedPaths(raw);
-        if (!resolved.length) {
-          setStatus("No video files found in dropped items.");
-          return;
-        }
-        if (resolved.length === 1) {
-          loadFile(resolved[0]);
+    const webview = getCurrentWebview();
+    const unlisten = webview.onDragDropEvent(e => {
+      if (e.payload.type === "over") { setDragOver(true); return; }
+      setDragOver(false);
+      if (e.payload.type !== "drop") return;
+      const paths = (e.payload as { paths?: string[] }).paths ?? [];
+      const videos = paths.filter(isVideo);
+      if (videos.length === 0) return;
+      if (videos.length === 1) {
+        if (screen === "batch") {
+          setBatchFiles(prev => {
+            const existing = new Set(prev.map(f => f.path));
+            const news = videos.filter(v => !existing.has(v));
+            return [...prev, ...news.map(p => ({ path: p, status: "pending" as const, edits: null }))];
+          });
         } else {
-          setBatchFiles(resolved.map(p => ({ path: p, status: "pending", edits: null })));
+          openFile(videos[0]);
+        }
+      } else {
+        // Multiple files → batch
+        if (screen === "batch") {
+          setBatchFiles(prev => {
+            const existing = new Set(prev.map(f => f.path));
+            const news = videos.filter(v => !existing.has(v));
+            return [...prev, ...news.map(p => ({ path: p, status: "pending" as const, edits: null }))];
+          });
+        } else {
+          setBatchFiles(videos.map(p => ({ path: p, status: "pending" as const, edits: null })));
           setScreen("batch");
         }
       }
-    }).then(fn => { off = fn; });
-    return () => off?.();
-  }, [loadFile, resolveDroppedPaths]);
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [screen, openFile]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<EncodeProgress>("encode-progress", (ev) => {
-      setProgress(ev.payload);
-    }).then(fn => { unlisten = fn; });
-    return () => unlisten?.();
-  }, []);
-
-  const pickFiles = async () => {
-    const result = await open({
-      multiple: true,
-      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"] }],
-    }) as string[] | string | null;
-    if (!result) return;
-    const paths = Array.isArray(result) ? result : [result];
-    if (paths.length === 0) return;
-    if (paths.length === 1) { loadFile(paths[0]); return; }
-    setBatchFiles(paths.map(p => ({ path: p, status: "pending" as const, edits: null })));
-    setScreen("batch");
-  };
-
-  const goFrame = (delta: number) =>
-    setFrameIdx(i => Math.max(0, Math.min(FRAME_COUNT - 1, i + delta)));
-
-  const runEncode = async (
-    vbr: number, abr: number, res: string, f: string,
-    outPath?: string, av1Override?: boolean, gpuOverride?: string
-  ) => {
-    if (!filePath || !info) return;
-    const out = outPath ?? await save({ filters: [{ name: "Output", extensions: [format] }] });
-    if (!out) return;
-    const encodeWithAv1 = av1Override ?? useAv1;
-    const encodeWithGpu = gpuOverride ?? gpuEncoder;
-    setEncoding(true);
-    setCancelling(false);
-    setProgress({ percent: 0, eta_secs: 0, pass: 1 });
-    try {
-      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                  ? videoEdits.trimStart : null;
-      const trimEndArg   = (videoEdits && videoEdits.trimEnd < info.duration_secs)   ? videoEdits.trimEnd   : null;
-      const deletedTracks  = videoEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
-      const volumeMap      = videoEdits?.audioTracks
-        .filter(t => !t.deleted && t.volume !== 100)
-        .reduce<Record<number, number>>((acc, t) => { acc[t.index] = t.volume; return acc; }, {}) ?? {};
-      const totalAudioTracks  = info.audio_tracks?.length ?? 1;
-      const mergeAudioTracks  = videoEdits?.mergeAudioTracks ?? false;
-
-      await invoke("encode_video_with_progress", {
-        input:            filePath,
-        output:           out,
-        resolution:       res,
-        videoBitrateKbps: vbr,
-        audioBitrateKbps: abr,
-        fps:              f,
-        durationSecs:     videoEdits ? (videoEdits.trimEnd - videoEdits.trimStart) : info.duration_secs,
-        trimStart:        trimStartArg,
-        trimEnd:          trimEndArg,
-        deletedTracks,
-        volumeMap,
-        totalAudioTracks,
-        mergeAudioTracks,
-        useAv1:           encodeWithAv1,
-        gpuEncoder:       encodeWithGpu,
-      });
-      let finalMb = estMb;
-      try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
-      setDoneResult({ outputPath: out, originalMb: info.size_mb, finalMb });
-      setScreen("done");
-    } catch (e) {
-      const msg = String(e);
-      if (msg !== "cancelled") {
-        setStatus(`❌ ${msg}`);
-      }
-    } finally {
-      setEncoding(false);
-      setCancelling(false);
-      setProgress(null);
-    }
-  };
-
-  const handleEncode  = () => runEncode(videoBr, audio, resolution, fps);
-  const handleDiscord = async () => {
-    if (!info) return;
-    const effectiveDuration = videoEdits
-      ? videoEdits.trimEnd - videoEdits.trimStart
-      : info.duration_secs;
-    const vbr = discordBr(effectiveDuration);
-    const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
-    const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
-    if (!out) return;
-    runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, useAv1, gpuEncoder);
-  };
-
-  const handleCancelEncode = async () => {
-    setCancelling(true);
-    try {
-      await invoke("cancel_encode");
-    } catch {
-      // ignore — the encode may have already finished
-    }
-  };
-
-  // ── Batch per-clip edit ─────────────────────────────────────────────────
-  const openBatchClipEditor = async (idx: number) => {
-    const file = batchFiles[idx];
-    if (!file) return;
-    try {
-      const clipInfo = await invoke<VideoInfo>("get_video_info", { input: file.path });
-      setBatchEditInfo(clipInfo);
-      setEditingBatchIdx(idx);
-    } catch (e) {
-      setStatus(`❌ Could not load clip info: ${e}`);
-    }
-  };
-
-  const saveBatchClipEdits = (edits: VideoEdits) => {
-    setBatchFiles(prev =>
-      prev.map((f, i) => i === editingBatchIdx ? { ...f, edits } : f)
-    );
-    setEditingBatchIdx(-1);
-    setBatchEditInfo(null);
-  };
-
-  const cancelBatchClipEditor = () => {
-    setEditingBatchIdx(-1);
-    setBatchEditInfo(null);
-  };
-  // ────────────────────────────────────────────────────────────────────────
-
-  const runBatch = async (outputDir: string, discordMode: boolean) => {
-    setBatchRunning(true);
-    setProgress({ percent: 0, eta_secs: 0, pass: 1 });
-    let succeeded = 0;
-    let failed = 0;
-    for (let i = 0; i < batchFiles.length; i++) {
-      const file = batchFiles[i];
-      setBatchFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: "active" } : f));
-      setBatchProgress({ idx: i, enc: { percent: 0, eta_secs: 0, pass: 1 }, currentFile: basename(file.path) });
-      setProgress({ percent: 0, eta_secs: 0, pass: 1 });
-      const inName  = basename(file.path).replace(/\.[^.]+$/, "");
-      const suffix  = discordMode ? "_discord" : "_encoded";
-      const outFile = `${outputDir}/${inName}${suffix}.mp4`;
-      try {
-        const infoRaw = await invoke<VideoInfo>("get_video_info", { input: file.path });
-        const clipEdits = file.edits;
-        let vbr: number, abr: number, res: string, f: string;
-        if (discordMode) {
-          const effectiveDur = clipEdits
-            ? clipEdits.trimEnd - clipEdits.trimStart
-            : infoRaw.duration_secs;
-          vbr = discordBr(effectiveDur); abr = DISCORD_AUDIO; res = resolution; f = fps;
-        } else {
-          const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
-          vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
-        }
-        const trimStartArg      = clipEdits && clipEdits.trimStart > 0                      ? clipEdits.trimStart : null;
-        const trimEndArg        = clipEdits && clipEdits.trimEnd < infoRaw.duration_secs     ? clipEdits.trimEnd   : null;
-        const deletedTracks     = clipEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
-        const volumeMap         = clipEdits?.audioTracks
-          .filter(t => !t.deleted && t.volume !== 100)
-          .reduce<Record<number, number>>((acc, t) => { acc[t.index] = t.volume; return acc; }, {}) ?? {};
-        const durationSecs      = clipEdits ? (clipEdits.trimEnd - clipEdits.trimStart) : infoRaw.duration_secs;
-        const mergeAudioTracks  = clipEdits?.mergeAudioTracks ?? false;
-
-        await invoke("encode_video_with_progress", {
-          input: file.path, output: outFile,
-          resolution: res, videoBitrateKbps: vbr,
-          audioBitrateKbps: abr, fps: f,
-          durationSecs,
-          trimStart:        trimStartArg,
-          trimEnd:          trimEndArg,
-          deletedTracks,
-          volumeMap,
-          totalAudioTracks: infoRaw.audio_tracks?.length ?? 1,
-          mergeAudioTracks,
-          useAv1,
-          gpuEncoder,
-        });
-        setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
-        succeeded++;
-      } catch (e) {
-        const msg = String(e);
-        if (msg === "cancelled") {
-          setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: "Cancelled" } : bf));
-          setBatchRunning(false);
-          setBatchProgress(null);
-          setCancelling(false);
-          setProgress(null);
-          return;
-        }
-        setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: String(e) } : bf));
-        failed++;
-      }
-    }
-    setBatchRunning(false);
-    setBatchProgress(null);
-    setProgress(null);
-    setBatchDoneResult({ total: batchFiles.length, succeeded, failed, outputDir });
-    setScreen("batch-done");
-  };
-
-  const startBatch = async (discordMode = false) => {
-    const dir = await open({ directory: true, multiple: false }) as string | null;
-    if (!dir) return;
-    runBatch(dir, discordMode);
-  };
-
-  const removeBatchFile = (idx: number) =>
-    setBatchFiles(prev => prev.filter((_, i) => i !== idx));
-
-  const addMoreFiles = async () => {
-    const result = await open({
-      multiple: true,
-      filters: [{ name: "Video", extensions: ["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"] }],
-    }) as string[] | null;
-    if (!result?.length) return;
-    setBatchFiles(prev => [...prev, ...result.map(p => ({ path: p, status: "pending" as const, edits: null }))]);
-  };
-
-  const reset = () => {
-    setScreen("drop"); setFilePath(""); setInfo(null);
-    setOrigFrames([]); setEncFrames({}); setFrameIdx(0);
-    setStatus(""); setProgress(null); setEncoding(false); setCancelling(false);
-    setBatchFiles([]); setBatchRunning(false); setBatchProgress(null);
-    setDoneResult(null); setBatchDoneResult(null);
-    setVideoEdits(null); setShowEditor(false);
-    setEditingBatchIdx(-1); setBatchEditInfo(null);
-  };
-
-  const currentOrig = origFrames[frameIdx];
-  const currentEnc  = encFrames[frameIdx];
-  const previewAspect = info ? info.width / info.height : 16 / 9;
-
-  const editsBadge = videoEdits
-    ? (() => {
-        const parts: string[] = [];
-        if (videoEdits.trimStart > 0 || (info && videoEdits.trimEnd < info.duration_secs))
-          parts.push(fmtTime(videoEdits.trimEnd - videoEdits.trimStart));
-        const del = videoEdits.audioTracks.filter(t => t.deleted).length;
-        if (del) parts.push(`−${del} audio`);
-        const activeTracks = videoEdits.audioTracks.filter(t => !t.deleted).length;
-        if (videoEdits.mergeAudioTracks && activeTracks > 1) parts.push("merged");
-        return parts.join(" · ");
-      })()
-    : null;
-
-  // Progress pass label — now shows actual encoder name
-  const passLabel = (() => {
-    if (!progress) return "";
-    if (progress.percent >= 100) return "Finalizing";
+  // ── Progress pass label — now shows actual encoder name ──
+  const progressPassLabel = (() => {
+    if (screen !== "loading") return "";
     const isGpu     = gpuEncoder !== "cpu";
     const gpuLabel  = gpuOptions.find(g => g.id === gpuEncoder)?.label ?? gpuEncoder.toUpperCase();
     if (useAv1) {
       const enc = isGpu ? gpuLabel : "CPU · SVT-AV1";
       return `Pass 1 / 1 — ${enc}`;
     }
-    // H.264
     if (isGpu) return `Pass 1 / 1 — ${gpuLabel}`;
-    if (progress.pass === 1) return "Pass 1 / 2 — Analyzing";
-    return "Pass 2 / 2 — Encoding";
+    return passNum === 1 ? "Pass 1 / 2 — CPU · Analysis" : "Pass 2 / 2 — CPU · Encode";
   })();
 
-  // Preview tag label
   const previewTagExtra = gpuShortLabel(gpuEncoder, useAv1);
 
-  return (
-    <div className="app">
+  // ── Render ─────────────────────────────────────────────
+  if (screen === "drop") return (
+    <div
+      className={`drop-screen${dragOver ? " drag-over" : ""}`}
+      onClick={() => openFile()}
+      onKeyDown={e => e.key === "Enter" && openFile()}
+      tabIndex={0}
+      role="button"
+      aria-label="Open video file"
+    >
+      <div className="drop-theme-btn" onClick={e => e.stopPropagation()}>
+        <ThemeBtn theme={theme} onToggle={e => { e.stopPropagation(); setTheme(t => t === "light" ? "dark" : "light"); }} />
+      </div>
+      <div className="drop-wordmark">
+        <QELogo size={36} />
+        <h1>quick encode<em>.</em></h1>
+        <small>fast video compression for Discord, web &amp; storage</small>
+      </div>
+      <div className="drop-hint-text">
+        <p>Drop a video file here</p>
+        <small>MP4 · MKV · MOV · AVI · WebM and more</small>
+      </div>
+      <div className="drop-actions" onClick={e => e.stopPropagation()}>
+        <button className="drop-browse" onClick={() => openFile()}>Browse files</button>
+        <button className="drop-browse" style={{ background: "none", color: "var(--text-muted)", border: "1px solid var(--border-2)" }}
+          onClick={() => {
+            setBatchFiles([]);
+            setScreen("batch");
+          }}>
+          Batch mode
+        </button>
+      </div>
+    </div>
+  );
 
-      {/* ── BATCH PER-CLIP EDITOR OVERLAY ── */}
-      {editingBatchIdx >= 0 && batchEditInfo && (() => {
-        const clipFile = batchFiles[editingBatchIdx];
-        return (
-          <VideoEditor
-            filePath={clipFile.path}
-            info={batchEditInfo}
-            theme={theme}
-            initialEdits={clipFile.edits}
-            onConfirm={saveBatchClipEdits}
-            onCancel={cancelBatchClipEditor}
+  if (screen === "loading") return (
+    <div className="loading-screen">
+      <div className="loading-content">
+        <div className="loading-wordmark">
+          <QELogo size={18} />
+          <span>quick encode<em>.</em></span>
+        </div>
+        <div className="loading-bar-wrap">
+          <div className="loading-bar-bg">
+            <div
+              className={`loading-bar-fill${progress > 0 ? "" : ""}`}
+              style={progress > 0 ? { width: `${progress}%`, animation: "none" } : {}}
+            />
+          </div>
+          <div className="loading-label">
+            {progress > 0
+              ? `${Math.round(progress)}% · ${fmtEta(eta)} remaining · ${progressPassLabel}`
+              : "Loading…"}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (screen === "done" && doneResult) {
+    const saved = doneResult.originalMb - doneResult.finalMb;
+    const savedPct = Math.round((saved / doneResult.originalMb) * 100);
+    return (
+      <div className="done-screen">
+        <div className="done-theme-btn">
+          <ThemeBtn theme={theme} onToggle={() => setTheme(t => t === "light" ? "dark" : "light")} />
+        </div>
+        <div className="done-card">
+          <div className="done-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <div className="done-title">Done</div>
+          <div className="done-stats">
+            <div className="done-stat">
+              <span className="done-stat-label">Original</span>
+              <span className="done-stat-val done-stat-muted">{fmtMb(doneResult.originalMb)}</span>
+            </div>
+            <div className="done-stat-divider" />
+            <div className="done-stat">
+              <span className="done-stat-label">Output</span>
+              <span className="done-stat-val">{fmtMb(doneResult.finalMb)}</span>
+            </div>
+            <div className="done-stat-divider" />
+            <div className="done-stat">
+              <span className="done-stat-label">Saved</span>
+              <span className={`done-stat-val ${saved >= 0 ? "done-stat-green" : "done-stat-warn"}`}>
+                {saved >= 0 ? `−${savedPct}%` : `+${Math.abs(savedPct)}%`}
+              </span>
+            </div>
+          </div>
+          <div className="done-filename">{basename(doneResult.outputPath)}</div>
+          <div className="done-actions">
+            <button className="done-btn-reveal" onClick={() => invoke("reveal_in_finder", { path: doneResult.outputPath })}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              Reveal in Finder
+            </button>
+            <button className="done-btn-new" onClick={() => { setScreen("drop"); setVideoPath(""); setVideoInfo(null); setEncFrames({}); setOrigFrames({}); setEdits(null); }}>
+              Import new file
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (screen === "batch-done" && batchDone) {
+    return (
+      <div className="done-screen">
+        <div className="done-theme-btn">
+          <ThemeBtn theme={theme} onToggle={() => setTheme(t => t === "light" ? "dark" : "light")} />
+        </div>
+        <div className="done-card">
+          <div className="done-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <div className="done-title">Batch Done</div>
+          <div className="done-stats">
+            <div className="done-stat">
+              <span className="done-stat-label">Total</span>
+              <span className="done-stat-val">{batchDone.total}</span>
+            </div>
+            <div className="done-stat-divider" />
+            <div className="done-stat">
+              <span className="done-stat-label">OK</span>
+              <span className="done-stat-val done-stat-green">{batchDone.succeeded}</span>
+            </div>
+            {batchDone.failed > 0 && <>
+              <div className="done-stat-divider" />
+              <div className="done-stat">
+                <span className="done-stat-label">Failed</span>
+                <span className="done-stat-val done-stat-warn">{batchDone.failed}</span>
+              </div>
+            </>}
+          </div>
+          <div className="done-actions">
+            <button className="done-btn-reveal" onClick={() => invoke("reveal_in_finder", { path: batchDone.outputDir })}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              Reveal output folder
+            </button>
+            <button className="done-btn-new" onClick={() => { setScreen("drop"); setBatchFiles([]); setBatchDone(null); }}>
+              Start over
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (screen === "batch") {
+    const isBusy = batchFiles.some(f => f.status === "active");
+    return (
+      <div className="batch-screen">
+        {/* Top bar */}
+        <div className="batch-topbar">
+          <Wordmark size="sm" />
+          <div className="batch-topbar-right">
+            <span className="batch-count">{batchFiles.length} file{batchFiles.length !== 1 ? "s" : ""}</span>
+            <ThemeBtn theme={theme} onToggle={() => setTheme(t => t === "light" ? "dark" : "light")} />
+          </div>
+        </div>
+
+        {/* File list */}
+        <div className="batch-file-list">
+          {batchFiles.length === 0 && (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--text-dim)", fontSize: 12, padding: 24 }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              <span>Drop video files here</span>
+            </div>
+          )}
+          {batchFiles.map((f, i) => {
+            const badge = editsBadgeForClip(f.edits, 0);
+            return (
+              <div key={f.path} className="batch-file-row">
+                <span className="batch-file-name">{basename(f.path)}</span>
+                {badge && <span className="batch-file-edits-badge">{badge}</span>}
+                {f.status === "pending" ? (
+                  <button
+                    className="batch-file-edit-btn"
+                    title="Edit trim / audio"
+                    disabled={isBusy}
+                    onClick={() => {
+                      setVideoPath(f.path);
+                      setBatchEditIdx(i);
+                      setShowEditor(true);
+                    }}
+                  >
+                    <EditIcon />
+                  </button>
+                ) : (
+                  <span className="batch-file-edit-spacer" />
+                )}
+                <span className={`batch-file-status ${f.status}`}>
+                  {f.status === "pending" ? "" : f.status === "active" ? "encoding…" : f.status === "done" ? "done" : f.msg ?? "error"}
+                </span>
+                {f.status === "pending" && (
+                  <button className="batch-file-remove" onClick={() => setBatchFiles(prev => prev.filter((_, j) => j !== i))} title="Remove">
+                    <CancelIcon />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Settings + actions */}
+        <div className="batch-bottom">
+          <QualitySettings
+            quality={quality} resolution={resolution} format={format}
+            audio={audio} fps={fps} useAv1={useAv1}
+            gpuEncoder={gpuEncoder} gpuOptions={gpuOptions} theme={theme}
+            onQuality={setQuality} onRes={setResolution} onFmt={setFormat}
+            onAudio={setAudio} onFps={setFps} onAv1={setUseAv1}
+            onGpuEncoder={setGpuEncoder}
           />
-        );
-      })()}
+          <div className="batch-actions">
+            <button
+              className="batch-add-btn"
+              disabled={isBusy}
+              onClick={async () => {
+                const files = await open({ multiple: true, filters: [{ name: "Video", extensions: [...VIDEO_EXTS] }] });
+                if (!files) return;
+                const arr = Array.isArray(files) ? files : [files];
+                setBatchFiles(prev => {
+                  const existing = new Set(prev.map(f => f.path));
+                  return [...prev, ...arr.filter(p => !existing.has(p)).map(p => ({ path: p, status: "pending" as const, edits: null }))];
+                });
+              }}
+            >
+              + Add more
+            </button>
+            <div style={{ flex: 1 }} />
+            <button className="preset-btn" disabled={isBusy || batchFiles.length === 0}
+              onClick={() => { if (videoInfo) handleDiscordEncode(); }}>
+              <DiscordIcon /><span>Discord Ready</span>
+            </button>
+            <button className="btn-encode" disabled={isBusy || batchFiles.length === 0} onClick={runBatchEncode}>
+              <span className="btn-inner">Encode All</span>
+            </button>
+          </div>
+        </div>
 
-      {/* ── VIDEO EDITOR OVERLAY (single-clip) ── */}
-      {showEditor && filePath && info && (
+        {/* Back link */}
+        <button style={{ background: "none", border: "none", color: "var(--text-dim)", fontSize: 11, cursor: "pointer", alignSelf: "flex-start", padding: 0 }}
+          onClick={() => setScreen("drop")}>
+          ← Back
+        </button>
+
+        {/* Batch clip editor overlay */}
+        {showEditor && batchEditIdx !== null && (
+          <VideoEditor
+            videoPath={videoPath}
+            initialEdits={batchFiles[batchEditIdx]?.edits ?? null}
+            onConfirm={newEdits => {
+              setBatchFiles(prev => prev.map((f, i) => i === batchEditIdx ? { ...f, edits: newEdits } : f));
+              setShowEditor(false);
+              setBatchEditIdx(null);
+            }}
+            onCancel={() => { setShowEditor(false); setBatchEditIdx(null); }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ── Editor screen ──────────────────────────────────────
+  const ar = videoInfo ? (() => { const g = gcd(videoInfo.width, videoInfo.height); return `${videoInfo.width/g}/${videoInfo.height/g}`; })() : "16/9";
+  const fmtRes = videoInfo ? `${videoInfo.width}×${videoInfo.height}` : "—";
+  const fmtDur = videoInfo ? fmtTime(videoInfo.duration_secs) : "—";
+  const fmtSize = videoInfo ? fmtMb(videoInfo.size_mb) : "—";
+  const fmtBr = videoInfo ? `${videoInfo.bitrate_kbps} kbps` : "—";
+  const estFinalMb = videoInfo
+    ? ((videoBr + audio) * videoInfo.duration_secs) / 8 / 1024
+    : 0;
+  const estDiff = videoInfo ? estFinalMb - videoInfo.size_mb : 0;
+
+  return (
+    <div className="editor">
+      {/* Top bar */}
+      <div className="topbar">
+        <div className="topbar-left">
+          <Wordmark size="sm" />
+          <div className="file-chip" onClick={() => { setScreen("drop"); setVideoPath(""); setVideoInfo(null); setEncFrames({}); setOrigFrames({}); setEdits(null); }} title="Close file">
+            <span>{basename(videoPath)}</span>
+            <span className="file-chip-x">✕</span>
+          </div>
+        </div>
+        <div className="topbar-right">
+          <button className="preset-btn" onClick={() => setScreen("batch")} title="Switch to batch mode">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="2" y="7" width="20" height="4" rx="1"/><rect x="2" y="13" width="20" height="4" rx="1"/>
+            </svg>
+            Batch
+          </button>
+          <ThemeBtn theme={theme} onToggle={() => setTheme(t => t === "light" ? "dark" : "light")} />
+        </div>
+      </div>
+
+      {/* Meta */}
+      <div className="video-meta">
+        {[
+          { label: "Duration", val: fmtDur },
+          { label: "Resolution", val: fmtRes },
+          { label: "Size", val: fmtSize },
+          { label: "Bitrate", val: fmtBr },
+        ].map(m => (
+          <div key={m.label} className="meta-item">
+            <span className="meta-label">{m.label}</span>
+            <span className="meta-val">{m.val}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Preview */}
+      <div className="preview-section">
+        <div className="preview-scaler">
+          <div className="preview-grid" style={{ "--preview-aspect": ar } as React.CSSProperties}>
+            {/* Original */}
+            <div
+              className="preview-side"
+              onClick={() => {
+                const src = origFrames[frameIdx];
+                if (src) setFullscreenImg({ src, label: "Original" });
+              }}
+            >
+              <div className="preview-tag">Original</div>
+              <button
+                className="preview-fullscreen-btn"
+                title="Fullscreen"
+                onClick={e => {
+                  e.stopPropagation();
+                  const src = origFrames[frameIdx];
+                  if (src) setFullscreenImg({ src, label: "Original" });
+                }}
+              >⤢</button>
+              {origFrames[frameIdx]
+                ? <img src={origFrames[frameIdx]} alt="Original frame" />
+                : (
+                  <div className="preview-loading">
+                    <div className="spin" />
+                    <span>Loading…</span>
+                  </div>
+                )}
+            </div>
+
+            {/* Encoded */}
+            <div
+              className="preview-side"
+              onClick={() => {
+                const src = encFrames[frameIdx];
+                if (src) setFullscreenImg({ src, label: "Encoded" });
+              }}
+            >
+              <div className="preview-tag">
+                Encoded
+                {previewTagExtra && <span className="preview-tag-av1">{previewTagExtra}</span>}
+              </div>
+              <button
+                className="preview-fullscreen-btn"
+                title="Fullscreen"
+                onClick={e => {
+                  e.stopPropagation();
+                  const src = encFrames[frameIdx];
+                  if (src) setFullscreenImg({ src, label: "Encoded" });
+                }}
+              >⤢</button>
+              {encFrames[frameIdx]
+                ? <img src={encFrames[frameIdx]} alt="Encoded preview frame" />
+                : (
+                  <div className="preview-loading">
+                    <div className="spin" />
+                    <span>Encoding preview…</span>
+                  </div>
+                )}
+            </div>
+          </div>
+
+          {/* Frame nav */}
+          <div className="frame-nav">
+            <button className="frame-nav-btn" onClick={() => setFrameIdx(i => Math.max(0, i - 1))} disabled={frameIdx === 0}>‹</button>
+            <div className="frame-dots">
+              {Array.from({ length: FRAME_COUNT }, (_, i) => (
+                <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} title={`Frame ${i + 1}`} />
+              ))}
+            </div>
+            <button className="frame-nav-btn" onClick={() => setFrameIdx(i => Math.min(FRAME_COUNT - 1, i + 1))} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
+            <span className="frame-label">
+              {videoInfo ? fmtTime(frameTs(frameIdx, videoInfo.duration_secs)) : "—"} / {fmtDur}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Settings */}
+      <div className="settings-row">
+        <QualitySettings
+          quality={quality} resolution={resolution} format={format}
+          audio={audio} fps={fps} useAv1={useAv1}
+          gpuEncoder={gpuEncoder} gpuOptions={gpuOptions} theme={theme}
+          onQuality={setQuality} onRes={setResolution} onFmt={setFormat}
+          onAudio={setAudio} onFps={setFps} onAv1={setUseAv1}
+          onGpuEncoder={setGpuEncoder}
+        />
+        <div className="settings-divider" />
+      </div>
+
+      {/* Bottom bar */}
+      <div className="bottom-bar">
+        <div className="est-inline">
+          <span className="est-val">{fmtMb(estFinalMb)}</span>
+          <span className="est-diff">{estDiff >= 0 ? `+${fmtMb(estDiff)}` : `−${fmtMb(-estDiff)}`}</span>
+        </div>
+        <button className="preset-btn" title="Trim or adjust audio tracks" onClick={() => setShowEditor(true)}>
+          <EditIcon /> Edit clip
+        </button>
+        <button className="preset-btn" title="Encode to 10 MB for Discord" onClick={handleDiscordEncode}>
+          <DiscordIcon /><span>Discord Ready</span>
+          <span className="preset-size">10 MB</span>
+        </button>
+        <button className="btn-encode" onClick={handleEncode}>
+          <span className="btn-inner">Encode</span>
+        </button>
+      </div>
+
+      {/* Progress overlay */}
+      {screen === "loading" && (
+        <div className="progress-overlay">
+          <div className="progress-card">
+            <div className="progress-title">Encoding…</div>
+            {progressPassLabel && <div className="progress-pass">{progressPassLabel}</div>}
+            <div className="progress-bar-wrap">
+              <div className="progress-bar-bg">
+                <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
+              </div>
+              <div className="progress-numbers">
+                <span>{fmtEta(eta)} remaining</span>
+                <span className="progress-pct">{Math.round(progress)}%</span>
+              </div>
+            </div>
+            <button className="progress-cancel-btn" onClick={() => invoke("cancel_encode")}>
+              <CancelIcon /> Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Clip editor overlay */}
+      {showEditor && (
         <VideoEditor
-          filePath={filePath}
-          info={info}
-          theme={theme}
-          initialEdits={videoEdits}
-          onConfirm={(edits) => {
-            setVideoEdits(edits);
-            setShowEditor(false);
-          }}
+          videoPath={videoPath}
+          initialEdits={edits}
+          onConfirm={newEdits => { setEdits(newEdits); setShowEditor(false); }}
           onCancel={() => setShowEditor(false)}
         />
       )}
 
-      {/* ── DROP ── */}
-      {screen === "drop" && (
-        <div className={`drop-screen${dragOver ? " drag-over" : ""}`} onClick={pickFiles}>
-          <div className="drop-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
-          <div className="drop-wordmark">
-            <QELogo size={36} />
-            <h1>quick encode<em>.</em></h1>
-            <small>video compressor</small>
-          </div>
-          <div className="drop-hint-text">
-            <p>{dragOver ? "Drop to load" : "Drop files or folders here"}</p>
-            <small>MP4 · MKV · AVI · MOV · WebM · M4V · select multiple for batch</small>
-          </div>
-          <div className="drop-actions">
-            <button className="drop-browse" onClick={e => { e.stopPropagation(); pickFiles(); }}>Browse files</button>
-          </div>
-          {status && <div className="status-bar">{status}</div>}
-        </div>
-      )}
-
-      {/* ── LOADING ── */}
-      {screen === "loading" && (
-        <div className="loading-screen">
-          <div className="loading-content">
-            <div className="loading-wordmark">
-              <QELogo size={18} />
-              <span>quick encode<em>.</em></span>
-            </div>
-            <div className="loading-bar-wrap">
-              <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
-              <div className="loading-label">Reading file &amp; extracting frames&hellip;</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── DONE (single) ── */}
-      {screen === "done" && doneResult && (() => {
-        const { outputPath, originalMb, finalMb } = doneResult;
-        const saved = Math.round((1 - finalMb / originalMb) * 100);
-        const grew  = finalMb > originalMb;
-        return (
-          <div className="done-screen">
-            <div className="done-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
-            <div className="done-card">
-              <div className="done-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </div>
-              <div className="done-title">Encode complete</div>
-              <div className="done-stats">
-                <div className="done-stat">
-                  <span className="done-stat-label">Output</span>
-                  <span className="done-stat-val">{fmtMb(finalMb)}</span>
-                </div>
-                <div className="done-stat-divider" />
-                <div className="done-stat">
-                  <span className="done-stat-label">Original</span>
-                  <span className="done-stat-val done-stat-muted">{fmtMb(originalMb)}</span>
-                </div>
-                <div className="done-stat-divider" />
-                <div className="done-stat">
-                  <span className="done-stat-label">Saved</span>
-                  <span className={`done-stat-val ${grew ? "done-stat-warn" : "done-stat-green"}`}>
-                    {grew ? `+${Math.abs(saved)}%` : `-${saved}%`}
-                  </span>
-                </div>
-              </div>
-              <div className="done-filename">{basename(outputPath)}</div>
-              <div className="done-actions">
-                <button className="done-btn-reveal" onClick={() => invoke("show_in_folder", { path: outputPath })}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                  </svg>
-                  Show in folder
-                </button>
-                <button className="done-btn-new" onClick={reset}>Import new file</button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* ── BATCH DONE ── */}
-      {screen === "batch-done" && batchDoneResult && (
-        <div className="done-screen">
-          <div className="done-theme-btn"><ThemeBtn theme={theme} onToggle={toggleTheme} /></div>
-          <div className="done-card">
-            <div className="done-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            </div>
-            <div className="done-title">Encode complete</div>
-            <div className="done-stats">
-              <div className="done-stat">
-                <span className="done-stat-label">Total</span>
-                <span className="done-stat-val">{batchDoneResult.total}</span>
-              </div>
-              <div className="done-stat-divider" />
-              <div className="done-stat">
-                <span className="done-stat-label">Done</span>
-                <span className="done-stat-val done-stat-green">{batchDoneResult.succeeded}</span>
-              </div>
-              {batchDoneResult.failed > 0 && (
-                <>
-                  <div className="done-stat-divider" />
-                  <div className="done-stat">
-                    <span className="done-stat-label">Failed</span>
-                    <span className="done-stat-val done-stat-warn">{batchDoneResult.failed}</span>
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="done-filename">{batchDoneResult.outputDir}</div>
-            <div className="done-actions">
-              <button className="done-btn-reveal" onClick={() => invoke("open_folder", { path: batchDoneResult.outputDir })}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                </svg>
-                Show in folder
-              </button>
-              <button className="done-btn-new" onClick={reset}>Import new file</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── BATCH SCREEN ── */}
-      {screen === "batch" && (
-        <div className="batch-screen">
-          <div className="batch-topbar">
-            <Wordmark size="sm" />
-            <div className="batch-topbar-right">
-              <span className="batch-count">{batchFiles.length} file{batchFiles.length !== 1 ? "s" : ""}</span>
-              <ThemeBtn theme={theme} onToggle={toggleTheme} />
-              <button className="file-chip" onClick={reset}>
-                <span>Clear all</span>
-                <span className="file-chip-x">&times;</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="batch-file-list">
-            {batchFiles.map((f, i) => {
-              const badge = editsBadgeForClip(f.edits, 0);
-              return (
-                <div key={f.path} className="batch-file-row">
-                  {!batchRunning && f.status !== "active" ? (
-                    <button
-                      className="batch-file-edit-btn"
-                      onClick={() => openBatchClipEditor(i)}
-                      title="Edit this clip"
-                      aria-label="Edit clip"
-                    >
-                      <EditIcon />
-                    </button>
-                  ) : (
-                    <span className="batch-file-edit-spacer" aria-hidden="true" />
-                  )}
-                  <span className="batch-file-name" title={f.path}>{basename(f.path)}</span>
-                  {badge && <span className="batch-file-edits-badge">{badge}</span>}
-                  <span className={`batch-file-status ${f.status}`}>
-                    {f.status === "pending" ? "Pending"
-                      : f.status === "active" ? "Encoding…"
-                      : f.status === "done"   ? "✓ Done"
-                      : "✕ Error"}
-                  </span>
-                  {!batchRunning && f.status !== "active" && (
-                    <button className="batch-file-remove" onClick={() => removeBatchFile(i)}>&times;</button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="batch-bottom">
-            <div className="batch-settings-row settings-row">
-              <QualitySettings
-                quality={quality} resolution={resolution} format={format} audio={audio} fps={fps}
-                useAv1={useAv1} gpuEncoder={gpuEncoder} gpuOptions={gpuOptions} theme={theme}
-                onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
-                onAv1={setUseAv1} onGpuEncoder={setGpuEncoder}
-              />
-            </div>
-            <div className="batch-actions">
-              <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>+ Add more</button>
-              <div style={{ flex: 1 }} />
-              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤10 MB for Discord">
-                <DiscordIcon />
-                Discord Ready
-                <span className="preset-size">≤10 MB each</span>
-              </button>
-              <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
-                {batchRunning
-                  ? <span className="btn-inner"><div className="spin" />Encoding…</span>
-                  : `Encode All (${batchFiles.length})`}
-              </button>
-            </div>
-            <div className="status-bar">{status}</div>
-          </div>
-        </div>
-      )}
-
-      {/* ── EDITOR ── */}
-      {screen === "editor" && info && (
-        <div className="editor">
-          <div className="topbar">
-            <div className="topbar-left"><Wordmark size="sm" /></div>
-            <div className="topbar-right">
-              <div className="file-chip" onClick={reset}>
-                <span>{basename(filePath)}</span>
-                <span className="file-chip-x">&times;</span>
-              </div>
-              <ThemeBtn theme={theme} onToggle={toggleTheme} />
-              <span className="version-badge">v2.1</span>
-            </div>
-          </div>
-
-          <div className="video-meta">
-            {(() => {
-              const d = gcd(info.width, info.height);
-              const items = [
-                { label: "Duration", val: fmtTime(info.duration_secs) },
-                { label: "Size",     val: fmtMb(info.size_mb) },
-                { label: "Res",      val: `${info.width}×${info.height}` },
-                { label: "Bitrate",  val: `${(info.bitrate_kbps/1000).toFixed(1)} Mbps` },
-                { label: "Aspect",   val: `${info.width/d}:${info.height/d}` },
-              ];
-              return items.map(({ label, val }) => (
-                <div key={label} className="meta-item">
-                  <span className="meta-label">{label}</span>
-                  <span className="meta-val">{val}</span>
-                </div>
-              ));
-            })()}
-          </div>
-
-          <div className="preview-section">
-            <div className="preview-scaler">
-              <div className="preview-grid">
-                <div
-                  className="preview-side"
-                  style={{ aspectRatio: previewAspect }}
-                  onClick={() => currentOrig && setFsImage({ src: currentOrig, label: "Original" })}
-                >
-                  {currentOrig ? (
-                    <img src={`data:image/jpeg;base64,${currentOrig}`} alt="Original" />
-                  ) : (
-                    <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
-                  )}
-                  <span className="preview-tag">Original</span>
-                  {currentOrig && (
-                    <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentOrig, label: "Original" }); }}>&#x26F6;</button>
-                  )}
-                </div>
-                <div
-                  className="preview-side"
-                  style={{ aspectRatio: previewAspect }}
-                  onClick={() => currentEnc && !encLoading && setFsImage({ src: currentEnc, label: "Output" })}
-                >
-                  {encLoading ? (
-                    <div className="preview-loading"><div className="spin" /><span>Rendering</span></div>
-                  ) : currentEnc ? (
-                    <img src={`data:image/jpeg;base64,${currentEnc}`} alt="Output" />
-                  ) : (
-                    <div className="preview-loading"><div className="spin" /><span>Loading</span></div>
-                  )}
-                  <span className="preview-tag">
-                    Output
-                    {previewTagExtra && <span className="preview-tag-av1">{previewTagExtra}</span>}
-                  </span>
-                  {currentEnc && !encLoading && (
-                    <button className="preview-fullscreen-btn" onClick={e => { e.stopPropagation(); setFsImage({ src: currentEnc, label: "Output" }); }}>&#x26F6;</button>
-                  )}
-                </div>
-              </div>
-              <div className="frame-nav">
-                <button className="frame-nav-btn" onClick={() => goFrame(-1)} disabled={frameIdx === 0}>‹</button>
-                <div className="frame-dots">
-                  {Array.from({ length: FRAME_COUNT }, (_, i) => (
-                    <button key={i} className={`frame-dot${i === frameIdx ? " active" : ""}`} onClick={() => setFrameIdx(i)} />
-                  ))}
-                </div>
-                <button className="frame-nav-btn" onClick={() => goFrame(1)} disabled={frameIdx === FRAME_COUNT - 1}>›</button>
-                <span className="frame-label">{frameIdx + 1} / {FRAME_COUNT} · {fmtTime(frameTs(frameIdx, info.duration_secs))}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="settings-row">
-            <QualitySettings
-              quality={quality} resolution={resolution} format={format} audio={audio} fps={fps}
-              useAv1={useAv1} gpuEncoder={gpuEncoder} gpuOptions={gpuOptions} theme={theme}
-              onQuality={setQuality} onRes={setRes} onFmt={setFmt} onAudio={setAudio} onFps={setFps}
-              onAv1={setUseAv1} onGpuEncoder={setGpuEncoder}
-            />
-          </div>
-
-          <div className="bottom-bar">
-            <div className="est-inline">
-              <span className="est-val">{fmtMb(estLow)} – {fmtMb(estHigh)}</span>
-              {reduction !== 0 && (
-                <span className="est-diff">{reduction > 0 ? `−${reduction}%` : `+${Math.abs(reduction)}%`}</span>
-              )}
-            </div>
-            <button
-              className="preset-btn"
-              onClick={() => setShowEditor(true)}
-              disabled={encoding}
-              title="Open video editor"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-              Edit
-              {editsBadge && <span className="preset-size">{editsBadge}</span>}
-            </button>
-            <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title="Encode targeting ≤10 MB for Discord">
-              <DiscordIcon />
-              Discord Ready
-              <span className="preset-size">≤10 MB</span>
-            </button>
-            <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
-              {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
-            </button>
-          </div>
-
-          <div className="status-bar">{status}</div>
-        </div>
-      )}
-
-      {/* ── PROGRESS OVERLAY ── */}
-      {(encoding || batchRunning) && progress && (
-        <div className="progress-overlay">
-          <div className="progress-card">
-            <div className="progress-title">
-              {cancelling ? "Cancelling…" : progress.percent >= 100 ? "Done" : "Encoding…"}
-            </div>
-            {batchRunning && batchProgress && (
-              <div className="progress-pass">
-                File {batchProgress.idx + 1} / {batchFiles.length} — {batchProgress.currentFile}
-              </div>
-            )}
-            <div className="progress-pass">{passLabel}</div>
-            <div className="progress-bar-wrap">
-              <div className="progress-bar-bg">
-                <div
-                  className={`progress-bar-fill${progress.percent >= 100 ? " done" : ""}`}
-                  style={{ width: `${progress.percent}%` }}
-                />
-              </div>
-              <div className="progress-numbers">
-                <span className="progress-pct">{Math.round(progress.percent)}%</span>
-                <span>
-                  {cancelling
-                    ? <span className="progress-done-msg">Stopping…</span>
-                    : progress.percent >= 100
-                      ? <span className="progress-done-msg">Complete</span>
-                      : progress.eta_secs > 0
-                        ? `ETA ${fmtEta(progress.eta_secs)}`
-                        : "Calculating…"}
-                </span>
-              </div>
-            </div>
-            {batchRunning && batchProgress && (
-              <div className="progress-numbers" style={{ marginTop: -8 }}>
-                <span className="progress-file-label">Overall: {batchProgress.idx + 1} / {batchFiles.length}</span>
-              </div>
-            )}
-            {!cancelling && (
-              <button
-                className="progress-cancel-btn"
-                onClick={handleCancelEncode}
-                aria-label="Cancel encode"
-              >
-                <CancelIcon />
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── FULLSCREEN ── */}
-      {fsImage && (
-        <div className="fullscreen-overlay" onClick={() => setFsImage(null)}>
-          <span className="fullscreen-label">{fsImage.label}</span>
-          <img src={`data:image/jpeg;base64,${fsImage.src}`} alt={fsImage.label} onClick={e => e.stopPropagation()} />
-          <div className="fullscreen-close" onClick={() => setFsImage(null)}>&times;</div>
+      {/* Fullscreen preview */}
+      {fullscreenImg && (
+        <div className="fullscreen-overlay" onClick={() => setFullscreenImg(null)}>
+          <div className="fullscreen-label">{fullscreenImg.label}</div>
+          <button className="fullscreen-close" onClick={() => setFullscreenImg(null)} aria-label="Close fullscreen">✕</button>
+          <img
+            src={fullscreenImg.src}
+            alt={fullscreenImg.label}
+            onClick={e => e.stopPropagation()}
+          />
         </div>
       )}
     </div>
