@@ -56,6 +56,77 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
     }
 }
 
+// ── GPU encoder identifiers ───────────────────────────────────────────────────
+// These are the string values passed from the frontend via `gpu_encoder`.
+// "cpu"            → no GPU, use libsvtav1 / libx264
+// "nvenc"          → NVIDIA (av1_nvenc / h264_nvenc)
+// "qsv"            → Intel QuickSync (av1_qsv / h264_qsv)
+// "amf"            → AMD AMF (hevc_amf / h264_amf)
+// "videotoolbox"   → Apple VideoToolbox (hevc_videotoolbox / h264_videotoolbox)
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct GpuEncoderInfo {
+    pub id:    String,  // "nvenc" | "qsv" | "amf" | "videotoolbox"
+    pub label: String,  // Human-readable label shown in UI
+}
+
+/// Probe ffmpeg to see which GPU encoders are actually available on this machine.
+/// Returns a list of available GPU encoder infos (may be empty).
+#[tauri::command]
+pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
+    let ffmpeg = match resolve_bin(&app, "ffmpeg") {
+        Ok(p) => p,
+        Err(_) => return vec![],
+    };
+
+    let out = match Command::new(&ffmpeg)
+        .args(["-encoders", "-v", "quiet"])
+        .no_window()
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    let mut result = vec![];
+
+    // NVENC — NVIDIA. av1_nvenc requires RTX 40+, but h264_nvenc works on GTX 600+.
+    // We report "nvenc" if either is present.
+    if stdout.contains("h264_nvenc") || stdout.contains("av1_nvenc") {
+        result.push(GpuEncoderInfo {
+            id:    "nvenc".into(),
+            label: "NVIDIA NVENC".into(),
+        });
+    }
+
+    // QuickSync — Intel iGPU / Arc
+    if stdout.contains("h264_qsv") || stdout.contains("av1_qsv") {
+        result.push(GpuEncoderInfo {
+            id:    "qsv".into(),
+            label: "Intel QuickSync".into(),
+        });
+    }
+
+    // AMF — AMD GPUs (RX 400+)
+    if stdout.contains("h264_amf") || stdout.contains("hevc_amf") {
+        result.push(GpuEncoderInfo {
+            id:    "amf".into(),
+            label: "AMD AMF".into(),
+        });
+    }
+
+    // VideoToolbox — macOS (Apple Silicon + Intel Mac with Metal)
+    if stdout.contains("h264_videotoolbox") || stdout.contains("hevc_videotoolbox") {
+        result.push(GpuEncoderInfo {
+            id:    "videotoolbox".into(),
+            label: "Apple VideoToolbox".into(),
+        });
+    }
+
+    result
+}
+
 // ── probe_av1_encoder ─────────────────────────────────────────────────────────
 // Returns "libsvtav1" if available, otherwise "libaom-av1".
 fn probe_av1_encoder(ffmpeg: &std::path::Path) -> &'static str {
@@ -70,6 +141,191 @@ fn probe_av1_encoder(ffmpeg: &std::path::Path) -> &'static str {
         }
     }
     "libaom-av1"
+}
+
+/// Resolve which concrete ffmpeg video codec to use given the user's codec/gpu choices.
+/// Returns `(codec_name, extra_args, is_single_pass)`.
+///
+/// * `use_av1`    — true when the user selected "AV1" codec
+/// * `gpu_encoder`— "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
+/// * `video_bv`   — bitrate string e.g. "3000k"
+/// * `ffmpeg`     — path to ffmpeg binary (needed to probe CPU AV1 encoder)
+fn resolve_video_codec(
+    use_av1:     bool,
+    gpu_encoder: &str,
+    video_bv:    &str,
+    ffmpeg:      &std::path::Path,
+) -> (Vec<String>, bool) {
+    // is_single_pass: AV1 and all GPU encoders use a single pass.
+    // x264 CPU uses 2-pass — caller handles this separately.
+    match (use_av1, gpu_encoder) {
+
+        // ── AV1 paths ────────────────────────────────────────────────────────
+        (true, "nvenc") => (vec![
+            "-c:v".into(), "av1_nvenc".into(),
+            "-preset".into(), "p4".into(),
+            "-cq".into(), "28".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+            "-bufsize".into(), video_bv.into(),
+        ], true),
+
+        (true, "qsv") => (vec![
+            "-c:v".into(), "av1_qsv".into(),
+            "-preset".into(), "medium".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+        ], true),
+
+        // AMD AMF has no AV1 encoder in most ffmpeg builds yet — fall back to hevc_amf
+        (true, "amf") => (vec![
+            "-c:v".into(), "hevc_amf".into(),
+            "-quality".into(), "balanced".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+        ], true),
+
+        // VideoToolbox has no AV1 — fall back to hevc_videotoolbox
+        (true, "videotoolbox") => (vec![
+            "-c:v".into(), "hevc_videotoolbox".into(),
+            "-b:v".into(), video_bv.into(),
+        ], true),
+
+        // AV1 CPU
+        (true, _) => {
+            let av1_enc = probe_av1_encoder(ffmpeg);
+            if av1_enc == "libsvtav1" {
+                (vec![
+                    "-c:v".into(), "libsvtav1".into(),
+                    "-preset".into(), "6".into(),
+                    "-b:v".into(), video_bv.into(),
+                    "-svtav1-params".into(), "tune=0".into(),
+                ], true)
+            } else {
+                (vec![
+                    "-c:v".into(), "libaom-av1".into(),
+                    "-cpu-used".into(), "4".into(),
+                    "-b:v".into(), video_bv.into(),
+                    "-maxrate".into(), video_bv.into(),
+                    "-bufsize".into(), video_bv.into(),
+                ], true)
+            }
+        }
+
+        // ── H.264 paths (use_av1 = false) ───────────────────────────────────
+        (false, "nvenc") => (vec![
+            "-c:v".into(), "h264_nvenc".into(),
+            "-preset".into(), "p4".into(),
+            "-rc".into(), "vbr".into(),
+            "-cq".into(), "23".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+            "-bufsize".into(), video_bv.into(),
+        ], true),
+
+        (false, "qsv") => (vec![
+            "-c:v".into(), "h264_qsv".into(),
+            "-preset".into(), "medium".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+        ], true),
+
+        (false, "amf") => (vec![
+            "-c:v".into(), "h264_amf".into(),
+            "-quality".into(), "balanced".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+        ], true),
+
+        (false, "videotoolbox") => (vec![
+            "-c:v".into(), "h264_videotoolbox".into(),
+            "-b:v".into(), video_bv.into(),
+        ], true),
+
+        // H.264 CPU — 2-pass (caller handles the two-pass logic)
+        (false, _) => (vec![
+            "-c:v".into(), "libx264".into(),
+            "-b:v".into(), video_bv.into(),
+        ], false),
+    }
+}
+
+/// Same as resolve_video_codec but tuned for quick preview frames (speed over quality).
+fn resolve_video_codec_preview(
+    use_av1:     bool,
+    gpu_encoder: &str,
+    video_bv:    &str,
+    ffmpeg:      &std::path::Path,
+) -> Vec<String> {
+    match (use_av1, gpu_encoder) {
+        (true, "nvenc") => vec![
+            "-c:v".into(), "av1_nvenc".into(),
+            "-preset".into(), "p4".into(),
+            "-cq".into(), "28".into(),
+            "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+            "-bufsize".into(), video_bv.into(),
+        ],
+        (true, "qsv") => vec![
+            "-c:v".into(), "av1_qsv".into(),
+            "-preset".into(), "faster".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        (true, "amf") => vec![
+            "-c:v".into(), "hevc_amf".into(),
+            "-quality".into(), "speed".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        (true, "videotoolbox") => vec![
+            "-c:v".into(), "hevc_videotoolbox".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        (true, _) => {
+            let av1_enc = probe_av1_encoder(ffmpeg);
+            if av1_enc == "libsvtav1" {
+                vec![
+                    "-c:v".into(), "libsvtav1".into(),
+                    "-preset".into(), "12".into(),
+                    "-crf".into(), "35".into(),
+                    "-b:v".into(), "0".into(),
+                ]
+            } else {
+                vec![
+                    "-c:v".into(), "libaom-av1".into(),
+                    "-cpu-used".into(), "8".into(),
+                    "-crf".into(), "35".into(),
+                    "-b:v".into(), "0".into(),
+                ]
+            }
+        }
+        (false, "nvenc") => vec![
+            "-c:v".into(), "h264_nvenc".into(),
+            "-preset".into(), "p1".into(),
+            "-rc".into(), "vbr".into(),
+            "-b:v".into(), video_bv.into(),
+            "-bufsize".into(), format!("{}k", video_bv.trim_end_matches('k').parse::<u32>().unwrap_or(3000) * 2),
+        ],
+        (false, "qsv") => vec![
+            "-c:v".into(), "h264_qsv".into(),
+            "-preset".into(), "faster".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        (false, "amf") => vec![
+            "-c:v".into(), "h264_amf".into(),
+            "-quality".into(), "speed".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        (false, "videotoolbox") => vec![
+            "-c:v".into(), "h264_videotoolbox".into(),
+            "-b:v".into(), video_bv.into(),
+        ],
+        (false, _) => vec![
+            "-c:v".into(), "libx264".into(),
+            "-b:v".into(), video_bv.into(),
+            "-bufsize".into(), format!("{}k", video_bv.trim_end_matches('k').parse::<u32>().unwrap_or(3000) * 2),
+            "-preset".into(), "ultrafast".into(),
+        ],
+    }
 }
 
 const VIDEO_EXTS: &[&str] = &["mp4","mkv","avi","mov","webm","m4v","wmv","flv","ts","mts"];
@@ -372,7 +628,7 @@ pub async fn get_encoded_frame(
     video_bitrate_kbps: u32,
     fps: String,
     use_av1: bool,
-    use_gpu: bool,
+    gpu_encoder: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg  = resolve_bin(&app, "ffmpeg")?;
@@ -382,8 +638,6 @@ pub async fn get_encoded_frame(
         let frame_s = frame.to_str().unwrap().to_string();
         let ts_str  = format!("{:.3}", timestamp);
         let bv      = format!("{}k", video_bitrate_kbps);
-        let maxrate = format!("{}k", video_bitrate_kbps);
-        let bufsize = format!("{}k", video_bitrate_kbps);
 
         let mut vf_parts: Vec<String> = vec![];
         match resolution.as_str() {
@@ -399,47 +653,9 @@ pub async fn get_encoded_frame(
         ];
         if !vf_parts.is_empty() { args.extend(["-vf".into(), vf_parts.join(",")]); }
 
-        if use_av1 {
-            if use_gpu {
-                args.extend([
-                    "-c:v".into(), "av1_nvenc".into(),
-                    "-preset".into(), "p4".into(),
-                    "-cq".into(), "28".into(),
-                    "-b:v".into(), bv,
-                    "-maxrate".into(), maxrate,
-                    "-bufsize".into(), bufsize,
-                    "-an".into(), clip_s.clone(),
-                ]);
-            } else {
-                let av1_enc = probe_av1_encoder(&ffmpeg);
-                if av1_enc == "libsvtav1" {
-                    // SVT-AV1 CRF preview: must pair -crf with -b:v 0
-                    args.extend([
-                        "-c:v".into(), "libsvtav1".into(),
-                        "-preset".into(), "12".into(),
-                        "-crf".into(), "35".into(),
-                        "-b:v".into(), "0".into(),
-                        "-an".into(), clip_s.clone(),
-                    ]);
-                } else {
-                    args.extend([
-                        "-c:v".into(), "libaom-av1".into(),
-                        "-cpu-used".into(), "8".into(),
-                        "-crf".into(), "35".into(),
-                        "-b:v".into(), "0".into(),
-                        "-an".into(), clip_s.clone(),
-                    ]);
-                }
-            }
-        } else {
-            args.extend([
-                "-c:v".into(), "libx264".into(),
-                "-b:v".into(), bv,
-                "-bufsize".into(), format!("{}k", video_bitrate_kbps * 2),
-                "-preset".into(), "ultrafast".into(),
-                "-an".into(), clip_s.clone(),
-            ]);
-        }
+        let codec_args = resolve_video_codec_preview(use_av1, &gpu_encoder, &bv, &ffmpeg);
+        args.extend(codec_args);
+        args.extend(["-an".into(), clip_s.clone()]);
 
         Command::new(&ffmpeg).args(&args).no_window().output().map_err(|e| e.to_string())?;
         Command::new(&ffmpeg)
@@ -465,34 +681,15 @@ fn abort_child(mut child: std::process::Child, output: &str) {
 }
 
 /// Build the audio portion of an ffmpeg argument list.
-///
-/// * `active_audio`      — list of audio stream indices that are NOT deleted
-/// * `volume_map`        — per-index volume overrides (100 = no change)
-/// * `merge_audio_tracks`— when true AND multiple active tracks exist, mix them
-///                         into a single output stream via amix
-///
-/// Returns `(extra_args, used_filter_complex)`.
-/// When `used_filter_complex` is true the caller must NOT add a second
-/// `-filter_complex` flag; the vf scale/fps filter has already been
-/// folded in via the `vf_arg` parameter.
 fn build_audio_args(
     active_audio:       &[usize],
     volume_map:         &HashMap<usize, u32>,
     merge_audio_tracks: bool,
-    vf_arg:             &[String],   // existing video filter args (may be empty)
+    vf_arg:             &[String],
 ) -> (Vec<String>, bool) {
-    // ── Merge path ───────────────────────────────────────────────────────────
-    // Use amix when merging is requested AND there are at least 2 active tracks.
     if merge_audio_tracks && active_audio.len() > 1 {
-        // Build a single filter_complex that:
-        //   1. Optionally applies per-track volume adjustments.
-        //   2. Feeds all tracks into amix → [aout].
-        //   3. Folds in any video scale/fps filter (vf_arg) so we only need
-        //      one -filter_complex flag total.
         let n = active_audio.len();
         let mut filter_parts: Vec<String> = vec![];
-
-        // Per-track volume → labelled outputs [v0],[v1],…
         let mut amix_inputs = String::new();
         for (out_idx, &ai) in active_audio.iter().enumerate() {
             let vol_pct = volume_map.get(&ai).copied().unwrap_or(100);
@@ -505,44 +702,29 @@ fn build_audio_args(
                 amix_inputs.push_str(&format!("[0:a:{ai}]"));
             }
         }
-
-        // amix: inputs=N, normalize=0 keeps loudness additive (same as before)
         filter_parts.push(format!("{amix_inputs}amix=inputs={n}:normalize=0[aout]"));
-
-        // Fold video filters in if present
         if !vf_arg.is_empty() {
-            // vf_arg is ["-vf", "scale=…,fps=…"]; extract the filter string
             if let Some(vf_str) = vf_arg.get(1) {
                 filter_parts.push(format!("[0:v:0]{vf_str}[vout]"));
             }
         }
-
         let mut args: Vec<String> = vec![
             "-filter_complex".into(),
             filter_parts.join(";"),
         ];
-
-        // Map video
         if !vf_arg.is_empty() {
             args.extend(["-map".into(), "[vout]".into()]);
         } else {
             args.extend(["-map".into(), "0:v:0".into()]);
         }
-
-        // Map merged audio
         args.extend(["-map".into(), "[aout]".into()]);
-
         return (args, true);
     }
 
-    // ── Normal path (no merge) ───────────────────────────────────────────────
     let has_volume_changes = active_audio.iter().any(|i| {
         volume_map.get(i).copied().unwrap_or(100) != 100
     });
-
     let mut args: Vec<String> = vec![];
-
-    // Video mapping (normal — no filter_complex needed for video)
     args.extend(vf_arg.to_vec());
     args.extend(["-map".into(), "0:v:0".into()]);
 
@@ -567,7 +749,6 @@ fn build_audio_args(
             args.extend(["-map".into(), format!("0:a:{ai}?")]);
         }
     }
-
     (args, false)
 }
 
@@ -588,9 +769,8 @@ pub async fn encode_video_with_progress(
     total_audio_tracks: usize,
     merge_audio_tracks: bool,
     use_av1: bool,
-    use_gpu: bool,
+    gpu_encoder: String,  // "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
 ) -> Result<String, String> {
-    // Reset cancel flag at the start of every new encode.
     CANCEL_FLAG.store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -629,65 +809,30 @@ pub async fn encode_video_with_progress(
             .filter(|i| !deleted_tracks.contains(i))
             .collect();
 
-        // Build audio args — handles both merge and non-merge paths.
-        // When merging, video filter is folded into filter_complex so we pass
-        // an empty vf_arg to the builder; when not merging we pass it as-is.
         let (audio_map_args, used_filter_complex) =
             build_audio_args(&active_audio, &volume_map, merge_audio_tracks, &vf_arg);
 
-        // ── AV1 single-pass path ──────────────────────────────────────────────────────
-        if use_av1 {
+        // Resolve which codec to use and whether it's single-pass
+        let (codec_args, is_single_pass) =
+            resolve_video_codec(use_av1, &gpu_encoder, &video_bv, &ffmpeg);
+
+        // ── Single-pass path (AV1 CPU + all GPU encoders) ─────────────────────
+        if is_single_pass {
             let _ = app.emit("encode-progress", EncodeProgress {
                 percent: 0.0, eta_secs: 0.0, pass: 1,
             });
 
-            let mut av1_args: Vec<String> = trim_args;
-            av1_args.extend(["-y".into(), "-i".into(), input]);
+            let mut enc_args: Vec<String> = trim_args;
+            enc_args.extend(["-y".into(), "-i".into(), input]);
             if let Some(dur) = clip_duration {
-                av1_args.extend(["-t".into(), format!("{dur:.6}")]);
+                enc_args.extend(["-t".into(), format!("{dur:.6}")]);
             }
-
-            // When NOT using filter_complex for merging, video filter goes here
             if !used_filter_complex {
-                av1_args.extend(vf_arg.clone());
+                enc_args.extend(vf_arg.clone());
             }
-
-            av1_args.extend(audio_map_args.clone());
-
-            if use_gpu {
-                let maxrate = video_bv.clone();
-                let bufsize = video_bv.clone();
-                av1_args.extend([
-                    "-c:v".into(), "av1_nvenc".into(),
-                    "-preset".into(), "p4".into(),
-                    "-cq".into(), "28".into(),
-                    "-b:v".into(), video_bv.clone(),
-                    "-maxrate".into(), maxrate,
-                    "-bufsize".into(), bufsize,
-                ]);
-            } else {
-                let av1_enc = probe_av1_encoder(&ffmpeg);
-                if av1_enc == "libsvtav1" {
-                    av1_args.extend([
-                        "-c:v".into(), "libsvtav1".into(),
-                        "-preset".into(), "6".into(),
-                        "-b:v".into(), video_bv.clone(),
-                        "-svtav1-params".into(), "tune=0".into(),
-                    ]);
-                } else {
-                    let maxrate = video_bv.clone();
-                    let bufsize = video_bv.clone();
-                    av1_args.extend([
-                        "-c:v".into(), "libaom-av1".into(),
-                        "-cpu-used".into(), "4".into(),
-                        "-b:v".into(), video_bv.clone(),
-                        "-maxrate".into(), maxrate,
-                        "-bufsize".into(), bufsize,
-                    ]);
-                }
-            }
-
-            av1_args.extend([
+            enc_args.extend(audio_map_args.clone());
+            enc_args.extend(codec_args);
+            enc_args.extend([
                 "-c:a".into(), "aac".into(),
                 "-b:a".into(), audio_ba,
                 "-progress".into(), "pipe:1".into(),
@@ -696,7 +841,7 @@ pub async fn encode_video_with_progress(
             ]);
 
             let mut child = Command::new(&ffmpeg)
-                .args(&av1_args)
+                .args(&enc_args)
                 .no_window()
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -739,19 +884,17 @@ pub async fn encode_video_with_progress(
 
             let status = child.wait().map_err(|e| e.to_string())?;
             if !status.success() {
-                let enc_name = if use_gpu { "av1_nvenc" } else { probe_av1_encoder(&ffmpeg) };
                 return Err(format!(
-                    "FFmpeg AV1 encode failed (exit code {:?}) using {}.",
-                    status.code(), enc_name
+                    "FFmpeg encode failed (exit {:?}) — encoder: {}, av1: {}",
+                    status.code(), gpu_encoder, use_av1
                 ));
             }
 
-            let out_size = std::fs::metadata(&output)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let out_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
             if out_size == 0 {
-                let enc_name = if use_gpu { "av1_nvenc" } else { probe_av1_encoder(&ffmpeg) };
-                return Err(format!("AV1 encode ({enc_name}) produced an empty output file."));
+                return Err(format!(
+                    "Encode produced an empty output file (encoder: {}).", gpu_encoder
+                ));
             }
 
             let _ = app.emit("encode-progress", EncodeProgress {
@@ -760,7 +903,7 @@ pub async fn encode_video_with_progress(
             return Ok("Done".into());
         }
 
-        // ── x264 2-pass path ──────────────────────────────────────────────────────
+        // ── x264 2-pass path ──────────────────────────────────────────────────
         let _ = app.emit("encode-progress", EncodeProgress {
             percent: 0.0, eta_secs: 0.0, pass: 1,
         });
@@ -770,7 +913,6 @@ pub async fn encode_video_with_progress(
         if let Some(dur) = clip_duration {
             pass1.extend(["-t".into(), format!("{dur:.6}")]);
         }
-        // Pass 1: video-only analysis — always use vf_arg directly (no audio)
         pass1.extend(vf_arg.clone());
         pass1.extend([
             "-c:v".into(), "libx264".into(),
@@ -842,14 +984,10 @@ pub async fn encode_video_with_progress(
         if let Some(dur) = clip_duration {
             pass2.extend(["-t".into(), format!("{dur:.6}")]);
         }
-
-        // When NOT using filter_complex for merging, video filter goes here
         if !used_filter_complex {
             pass2.extend(vf_arg);
         }
-
         pass2.extend(audio_map_args);
-
         pass2.extend([
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv,
@@ -905,9 +1043,7 @@ pub async fn encode_video_with_progress(
         let status = child.wait().map_err(|e| e.to_string())?;
         if !status.success() { return Err("FFmpeg pass 2 failed".into()); }
 
-        let out_size = std::fs::metadata(&output)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let out_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
         if out_size == 0 {
             return Err("Encode produced an empty output file.".into());
         }
