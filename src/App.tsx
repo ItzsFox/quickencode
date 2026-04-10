@@ -259,32 +259,10 @@ function QualitySettings({
               <option value="24">24 fps</option>
             </select>
           </div>
-        </div>
-        <div className="av1-toggle-row">
-          {/* AV1 checkbox */}
-          <label className="av1-toggle" htmlFor="av1-checkbox"
-            title="Uses SVT-AV1 encoder — better quality at the same file size, but slower to encode than H.264">
-            <input
-              id="av1-checkbox"
-              type="checkbox"
-              checked={useAv1}
-              onChange={e => {
-                onAv1(e.target.checked);
-                // When disabling AV1, keep GPU selection as-is (H.264 GPU still works)
-              }}
-            />
-            <span className="av1-toggle-label">AV1 encoder</span>
-            {useAv1
-              ? <span className="av1-slow-badge">slower encode</span>
-              : <span className="av1-hint">better quality, longer encode</span>}
-          </label>
-
-          {/* GPU encoder selector — shown when any GPU option exists */}
           {gpuSelectOptions.length > 1 && (
-            <div className="gpu-select-row">
-              <span className="gpu-select-label">GPU</span>
+            <div className="setting">
+              <label>GPU</label>
               <select
-                className="gpu-select"
                 value={gpuEncoder}
                 onChange={e => onGpuEncoder(e.target.value)}
                 title="Select GPU acceleration backend. CPU uses software encoding (2-pass for H.264, single-pass for AV1)."
@@ -293,13 +271,21 @@ function QualitySettings({
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
-              {gpuEncoder !== "cpu" && (
-                <span className="av1-slow-badge gpu-badge">
-                  {gpuOptions.find(g => g.id === gpuEncoder)?.label ?? gpuEncoder.toUpperCase()}
-                </span>
-              )}
             </div>
           )}
+        </div>
+        <div className="av1-toggle-row">
+          <label className="av1-toggle" htmlFor="av1-checkbox"
+            title="Uses SVT-AV1 encoder — better quality at the same file size, but slower to encode than H.264">
+            <input
+              id="av1-checkbox"
+              type="checkbox"
+              checked={useAv1}
+              onChange={e => onAv1(e.target.checked)}
+            />
+            <span className="av1-toggle-label">AV1 encoder</span>
+            {useAv1 && <span className="av1-slow-badge">slower encode</span>}
+          </label>
         </div>
       </div>
     </>
