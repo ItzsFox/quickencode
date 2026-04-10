@@ -82,7 +82,7 @@ pub struct GpuEncoderInfo {
 fn test_encoder(ffmpeg: &std::path::Path, encoder: &str) -> bool {
     let status = Command::new(ffmpeg)
         .args([
-            "-f", "lavfi", "-i", "color=black:s=64x64:r=1",
+            "-f", "lavfi", "-i", "color=black:s=128x128:r=1",
             "-vframes", "1",
             "-c:v", encoder,
             "-f", "null",
@@ -101,22 +101,30 @@ fn test_encoder(ffmpeg: &std::path::Path, encoder: &str) -> bool {
 /// av1_nvenc and sometimes hevc_nvenc exit 0 on a 64×64 synthetic encode but
 /// fail immediately on real content (exit -542398553 / 0xDFFFFFEB).
 ///
-/// This variant uses `-init_hw_device cuda=gpu` which makes the NVENC driver
-/// actually allocate a hardware session, correctly returning non-zero on GPUs
-/// that lack the required encode engine (HEVC needs Maxwell+, AV1 needs Ada).
+/// Uses 128x128 (above NVENC minimum of 145x? — profile main is explicit to
+/// satisfy Pascal's HEVC engine which rejects the default "main10" profile).
 fn test_nvenc_codec(ffmpeg: &std::path::Path, encoder: &str) -> bool {
+    // For HEVC specifically, we must pass -profile:v main — Pascal's hevc_nvenc
+    // engine doesn't support main10 and will exit 0 on a tiny test frame but
+    // fail with 0xDFFFFFEB on real encodes without an explicit profile.
+    let mut args: Vec<&str> = vec![
+        "-hide_banner",
+        "-init_hw_device", "cuda=gpu:0",
+        "-f", "lavfi", "-i", "color=black:s=128x128:r=1",
+        "-vframes", "1",
+        "-c:v", encoder,
+        "-gpu", "0",
+    ];
+    if encoder == "hevc_nvenc" {
+        args.extend(["-profile:v", "main"]);
+    }
+    args.extend([
+        "-f", "null",
+        #[cfg(target_os = "windows")] "NUL",
+        #[cfg(not(target_os = "windows"))] "/dev/null",
+    ]);
     let status = Command::new(ffmpeg)
-        .args([
-            "-hide_banner",
-            "-init_hw_device", "cuda=gpu:0",
-            "-f", "lavfi", "-i", "color=black:s=64x64:r=1",
-            "-vframes", "1",
-            "-c:v", encoder,
-            "-gpu", "0",
-            "-f", "null",
-            #[cfg(target_os = "windows")] "NUL",
-            #[cfg(not(target_os = "windows"))] "/dev/null",
-        ])
+        .args(&args)
         .no_window()
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -155,7 +163,7 @@ pub fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
 
     // NVENC — NVIDIA
     // Use test_nvenc_codec (stricter) instead of test_encoder for all NVENC paths.
-    // GTX 10xx (Pascal): h264_nvenc works, hevc_nvenc and av1_nvenc do NOT.
+    // GTX 10xx (Pascal): h264_nvenc + hevc_nvenc work, av1_nvenc does NOT.
     // RTX 20xx/30xx (Turing/Ampere): h264 + hevc work, av1 does NOT.
     // RTX 40xx+ (Ada Lovelace): all three work.
     if stdout.contains("h264_nvenc") || stdout.contains("hevc_nvenc") || stdout.contains("av1_nvenc") {
@@ -319,8 +327,12 @@ fn resolve_video_codec(
         }
 
         // ── H.265 (HEVC) paths ───────────────────────────────────────────────
+        // -profile:v main is required for Pascal (GTX 10xx) hevc_nvenc.
+        // Without it the driver defaults to main10 which Pascal doesn't support,
+        // causing exit 0xDFFFFFEB on real encodes.
         ("h265", "nvenc") => (vec![
             "-c:v".into(), "hevc_nvenc".into(),
+            "-profile:v".into(), "main".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "vbr".into(),
             "-cq".into(), "24".into(),
@@ -442,9 +454,10 @@ fn resolve_video_codec_preview(
                 ]
             }
         }
-        // H.265
+        // H.265 — same -profile:v main fix for Pascal preview encodes
         ("h265", "nvenc") => vec![
             "-c:v".into(), "hevc_nvenc".into(),
+            "-profile:v".into(), "main".into(),
             "-preset".into(), "p1".into(),
             "-rc".into(), "vbr".into(),
             "-b:v".into(), video_bv.into(),
