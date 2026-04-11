@@ -275,6 +275,19 @@ fn probe_av1_encoder(ffmpeg: &std::path::Path) -> &'static str {
     "libaom-av1"
 }
 
+// ── nvenc_bufsize ─────────────────────────────────────────────────────────────
+// Returns a bufsize string that is 2× the target bitrate.
+// A 1× bufsize is too tight — NVENC's internal rate smoother compensates by
+// letting individual GOPs overshoot. 2× gives it room to smooth without going
+// over the overall ceiling.
+fn nvenc_bufsize(video_bv: &str) -> String {
+    let kbps: u64 = video_bv
+        .trim_end_matches('k')
+        .parse()
+        .unwrap_or(3000);
+    format!("{}k", kbps * 2)
+}
+
 /// Resolve which concrete ffmpeg video codec to use.
 /// `codec`       — "h264" | "h265" | "av1"
 /// `gpu_encoder` — "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
@@ -288,18 +301,20 @@ fn resolve_video_codec(
     match (codec, gpu_encoder) {
 
         // ── AV1 paths ────────────────────────────────────────────────────────
-        // NVENC AV1: use -rc cbr so the bitrate target is treated as a hard
-        // ceiling, not a quality hint. -cq was causing NVENC to ignore -maxrate.
+        // NVENC AV1: -rc cbr + 2-pass lookahead (-2pass 1 -multipass fullres)
+        // for tight bitrate targeting. bufsize = 2× target.
         ("av1", "nvenc") => (vec![
             "-c:v".into(), "av1_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "cbr".into(),
+            "-2pass".into(), "1".into(),
+            "-multipass".into(), "fullres".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
-            "-bufsize".into(), video_bv.into(),
+            "-bufsize".into(), nvenc_bufsize(video_bv),
         ], true),
 
-        // QSV: add -bufsize so the encoder actually enforces the ceiling.
+        // QSV: -bufsize enforces the ceiling.
         ("av1", "qsv") => (vec![
             "-c:v".into(), "av1_qsv".into(),
             "-preset".into(), "medium".into(),
@@ -350,18 +365,20 @@ fn resolve_video_codec(
 
         // ── H.265 (HEVC) paths ───────────────────────────────────────────────
         // -profile:v main is required for Pascal (GTX 10xx) hevc_nvenc.
-        // NVENC: drop -rc vbr -cq, use -rc cbr so the bitrate is enforced.
+        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         ("h265", "nvenc") => (vec![
             "-c:v".into(), "hevc_nvenc".into(),
             "-profile:v".into(), "main".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "cbr".into(),
+            "-2pass".into(), "1".into(),
+            "-multipass".into(), "fullres".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
-            "-bufsize".into(), video_bv.into(),
+            "-bufsize".into(), nvenc_bufsize(video_bv),
         ], true),
 
-        // QSV: add -bufsize.
+        // QSV: -bufsize enforces the ceiling.
         ("h265", "qsv") => (vec![
             "-c:v".into(), "hevc_qsv".into(),
             "-preset".into(), "medium".into(),
@@ -370,7 +387,7 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // AMF: add -rc cbr.
+        // AMF: -rc cbr.
         ("h265", "amf") => (vec![
             "-c:v".into(), "hevc_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -379,7 +396,7 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // VideoToolbox: add -maxrate/-minrate to force CBR.
+        // VideoToolbox: -maxrate/-minrate to force CBR.
         ("h265", "videotoolbox") => (vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -395,17 +412,19 @@ fn resolve_video_codec(
         ], true),
 
         // ── H.264 paths ──────────────────────────────────────────────────────
-        // NVENC: drop -rc vbr -cq 23, use -rc cbr so the bitrate is enforced.
+        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         (_, "nvenc") => (vec![
             "-c:v".into(), "h264_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "cbr".into(),
+            "-2pass".into(), "1".into(),
+            "-multipass".into(), "fullres".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
-            "-bufsize".into(), video_bv.into(),
+            "-bufsize".into(), nvenc_bufsize(video_bv),
         ], true),
 
-        // QSV: add -bufsize.
+        // QSV: -bufsize enforces the ceiling.
         (_, "qsv") => (vec![
             "-c:v".into(), "h264_qsv".into(),
             "-preset".into(), "medium".into(),
@@ -414,7 +433,7 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // AMF: add -rc cbr.
+        // AMF: -rc cbr.
         (_, "amf") => (vec![
             "-c:v".into(), "h264_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -423,7 +442,7 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // VideoToolbox: add -maxrate/-minrate to force CBR.
+        // VideoToolbox: -maxrate/-minrate to force CBR.
         (_, "videotoolbox") => (vec![
             "-c:v".into(), "h264_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -450,16 +469,18 @@ fn resolve_video_codec_preview(
 ) -> Vec<String> {
     match (codec, gpu_encoder) {
         // AV1
-        // NVENC: drop -cq, use -rc cbr.
+        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         ("av1", "nvenc") => vec![
             "-c:v".into(), "av1_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "cbr".into(),
+            "-2pass".into(), "1".into(),
+            "-multipass".into(), "fullres".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
-            "-bufsize".into(), video_bv.into(),
+            "-bufsize".into(), nvenc_bufsize(video_bv),
         ],
-        // QSV: add -bufsize.
+        // QSV: -bufsize.
         ("av1", "qsv") => vec![
             "-c:v".into(), "av1_qsv".into(),
             "-preset".into(), "faster".into(),
@@ -467,7 +488,7 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // AMF: add -rc cbr.
+        // AMF: -rc cbr.
         ("av1", "amf") => vec![
             "-c:v".into(), "hevc_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -475,7 +496,7 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // VideoToolbox: add -maxrate/-minrate.
+        // VideoToolbox: -maxrate/-minrate.
         ("av1", "videotoolbox") => vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -501,17 +522,19 @@ fn resolve_video_codec_preview(
             }
         }
         // H.265
-        // NVENC: drop -rc vbr, use -rc cbr.
+        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         ("h265", "nvenc") => vec![
             "-c:v".into(), "hevc_nvenc".into(),
             "-profile:v".into(), "main".into(),
             "-preset".into(), "p1".into(),
             "-rc".into(), "cbr".into(),
+            "-2pass".into(), "1".into(),
+            "-multipass".into(), "fullres".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
-            "-bufsize".into(), video_bv.into(),
+            "-bufsize".into(), nvenc_bufsize(video_bv),
         ],
-        // QSV: add -bufsize.
+        // QSV: -bufsize.
         ("h265", "qsv") => vec![
             "-c:v".into(), "hevc_qsv".into(),
             "-preset".into(), "faster".into(),
@@ -519,7 +542,7 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // AMF: add -rc cbr.
+        // AMF: -rc cbr.
         ("h265", "amf") => vec![
             "-c:v".into(), "hevc_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -527,7 +550,7 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // VideoToolbox: add -maxrate/-minrate.
+        // VideoToolbox: -maxrate/-minrate.
         ("h265", "videotoolbox") => vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -541,16 +564,18 @@ fn resolve_video_codec_preview(
             "-x265-params".into(), "log-level=error".into(),
         ],
         // H.264
-        // NVENC: drop -rc vbr, use -rc cbr.
+        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         (_, "nvenc") => vec![
             "-c:v".into(), "h264_nvenc".into(),
             "-preset".into(), "p1".into(),
             "-rc".into(), "cbr".into(),
+            "-2pass".into(), "1".into(),
+            "-multipass".into(), "fullres".into(),
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
-            "-bufsize".into(), video_bv.into(),
+            "-bufsize".into(), nvenc_bufsize(video_bv),
         ],
-        // QSV: add -bufsize.
+        // QSV: -bufsize.
         (_, "qsv") => vec![
             "-c:v".into(), "h264_qsv".into(),
             "-preset".into(), "faster".into(),
@@ -558,7 +583,7 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // AMF: add -rc cbr.
+        // AMF: -rc cbr.
         (_, "amf") => vec![
             "-c:v".into(), "h264_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -566,7 +591,7 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // VideoToolbox: add -maxrate/-minrate.
+        // VideoToolbox: -maxrate/-minrate.
         (_, "videotoolbox") => vec![
             "-c:v".into(), "h264_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
