@@ -521,8 +521,10 @@ export default function App() {
 
   // Recompute accel options whenever codec or detected GPUs change.
   // GPU options are listed first (best → others), CPU last.
-  // The best GPU is auto-selected; if the user's current selection is still
-  // valid for the new codec it is preserved instead.
+  // The best GPU is auto-selected; if the user's current selection is a real
+  // GPU encoder still valid for the new codec, it is preserved. If the previous
+  // selection was "cpu" (e.g. forced there by AV1 on an unsupported GPU),
+  // always promote to the best available GPU for the new codec.
   useEffect(() => {
     const gpuOpts: AccelOption[] = [];
     for (const gpu of gpuOptions) {
@@ -543,13 +545,13 @@ export default function App() {
       { id: "cpu", label: "Software (CPU)" },
     ];
     setAccelOptions(opts);
-    // Auto-select best: prefer first GPU option over CPU, but keep current
-    // selection if it's still in the new list (e.g. user switched codec while
-    // already on NVENC and NVENC still supports the new codec).
+    // Auto-select best: keep the current selection only if it's a real GPU encoder
+    // that is still valid for the new codec. If the previous value was "cpu"
+    // (e.g. forced there because the prior codec had no GPU support), always
+    // promote to the best available GPU option instead.
     setGpuEncoder(prev => {
       const stillValid = opts.some(o => o.id === prev);
-      if (stillValid) return prev;
-      // Previous selection no longer valid for this codec — pick best available
+      if (stillValid && prev !== "cpu") return prev;
       return gpuOpts[0]?.id ?? "cpu";
     });
   }, [codec, gpuOptions]);
