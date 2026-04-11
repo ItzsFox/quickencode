@@ -390,24 +390,24 @@ function QualitySettings({
               <option value="24">24 fps</option>
             </select>
           </div>
-          <div className="setting">
-            <label className="setting-label-row">
-              Encoder
-              <button
-                className="enc-info-btn"
-                onClick={onOpenEncoderInfo}
-                title="Learn about encoder differences"
-                aria-label="Encoder information"
-              >
-                <InfoIcon />
-              </button>
-            </label>
-            <select value={codec} onChange={e => onCodec(e.target.value)}>
-              <option value="h264">H.264</option>
-              <option value="h265">H.265 (HEVC)</option>
-              <option value="av1">AV1</option>
-            </select>
-          </div>
+            <div className="setting">
+              <div className="setting-label-row">
+                <span>Encoder</span>
+                <button
+                  className="enc-info-btn"
+                  onClick={e => { e.preventDefault(); e.stopPropagation(); onOpenEncoderInfo(); }}
+                  title="Learn about encoders"
+                  aria-label="Encoder information"
+                >
+                  <InfoIcon />
+                </button>
+              </div>
+              <select value={codec} onChange={e => onCodec(e.target.value)}>
+                <option value="h264">H.264</option>
+                <option value="h265">H.265 (HEVC)</option>
+                <option value="av1">AV1</option>
+              </select>
+            </div>
           <div className="setting"><label>Hardware Accel</label>
             <select
               value={gpuEncoder}
