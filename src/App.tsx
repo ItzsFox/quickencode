@@ -1125,6 +1125,7 @@ export default function App() {
               <span className="batch-count">{batchFiles.length} file{batchFiles.length !== 1 ? "s" : ""}</span>
               <ThemeBtn theme={theme} onToggle={toggleTheme} />
               <button className="batch-add-btn" onClick={reset}>
+                <CancelIcon />
                 Clear all
               </button>
             </div>
