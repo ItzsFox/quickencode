@@ -528,10 +528,7 @@ export default function App() {
 
   // Recompute accel options whenever codec or detected GPUs change.
   // GPU options are listed first (best → others), CPU last.
-  // The best GPU is auto-selected; if the user's current selection is a real
-  // GPU encoder still valid for the new codec, it is preserved. If the previous
-  // selection was "cpu" (e.g. forced there by AV1 on an unsupported GPU),
-  // always promote to the best available GPU for the new codec.
+  // Always default to CPU ("cpu"). The user can manually select a GPU if desired.
   useEffect(() => {
     const gpuOpts: AccelOption[] = [];
     for (const gpu of gpuOptions) {
@@ -552,14 +549,12 @@ export default function App() {
       { id: "cpu", label: "Software (CPU)" },
     ];
     setAccelOptions(opts);
-    // Auto-select best: keep the current selection only if it's a real GPU encoder
-    // that is still valid for the new codec. If the previous value was "cpu"
-    // (e.g. forced there because the prior codec had no GPU support), always
-    // promote to the best available GPU option instead.
+    // Always default to CPU. Only preserve the current GPU selection if the user
+    // has already manually chosen a GPU that is still valid for the new codec.
     setGpuEncoder(prev => {
-      const stillValid = opts.some(o => o.id === prev);
-      if (stillValid && prev !== "cpu") return prev;
-      return gpuOpts[0]?.id ?? "cpu";
+      if (prev === "cpu") return "cpu";
+      const stillValid = opts.some(o => o.id === prev && o.id !== "cpu");
+      return stillValid ? prev : "cpu";
     });
   }, [codec, gpuOptions]);
 
@@ -956,6 +951,9 @@ export default function App() {
   // Preview tag label
   const previewTagExtra = gpuShortLabel(codec, gpuEncoder);
 
+  // Discord Ready is unreliable with GPU encoders (bitrate control is imprecise)
+  const gpuSelected = gpuEncoder !== "cpu";
+
   return (
     <div className="app">
 
@@ -1186,11 +1184,21 @@ export default function App() {
             <div className="batch-actions">
               <button className="batch-add-btn" onClick={addMoreFiles} disabled={batchRunning}>+ Add more</button>
               <div style={{ flex: 1 }} />
-              <button className="preset-btn" onClick={() => startBatch(true)} disabled={batchRunning} title="Encode all files targeting ≤10 MB for Discord">
-                <DiscordIcon />
-                Discord Ready
-                <span className="preset-size">≤10 MB each</span>
-              </button>
+              <span
+                className={gpuSelected ? "preset-btn-wrapper preset-btn-wrapper--disabled" : undefined}
+                title={gpuSelected ? "Unreliable with GPU encoding — switch to Software (CPU) for accurate file size targeting" : undefined}
+              >
+                <button
+                  className="preset-btn"
+                  onClick={() => startBatch(true)}
+                  disabled={batchRunning || gpuSelected}
+                  title={gpuSelected ? "Unreliable with GPU encoding — switch to Software (CPU) for accurate file size targeting" : "Encode all files targeting ≤10 MB for Discord"}
+                >
+                  <DiscordIcon />
+                  Discord Ready
+                  <span className="preset-size">≤10 MB each</span>
+                </button>
+              </span>
               <button className="btn-encode" onClick={() => startBatch(false)} disabled={batchRunning}>
                 {batchRunning
                   ? <span className="btn-inner"><div className="spin" />Encoding…</span>
@@ -1318,12 +1326,21 @@ export default function App() {
               Edit
               {editsBadge && <span className="preset-size">{editsBadge}</span>}
             </button>
-            <button className="preset-btn" onClick={handleDiscord} disabled={encoding}
-              title="Encode targeting ≤10 MB for Discord">
-              <DiscordIcon />
-              Discord Ready
-              <span className="preset-size">≤10 MB</span>
-            </button>
+            <span
+              className={gpuSelected ? "preset-btn-wrapper preset-btn-wrapper--disabled" : undefined}
+              title={gpuSelected ? "Unreliable with GPU encoding — switch to Software (CPU) for accurate file size targeting" : undefined}
+            >
+              <button
+                className="preset-btn"
+                onClick={handleDiscord}
+                disabled={encoding || gpuSelected}
+                title={gpuSelected ? "Unreliable with GPU encoding — switch to Software (CPU) for accurate file size targeting" : "Encode targeting ≤10 MB for Discord"}
+              >
+                <DiscordIcon />
+                Discord Ready
+                <span className="preset-size">≤10 MB</span>
+              </button>
+            </span>
             <button className="btn-encode" onClick={handleEncode} disabled={encoding}>
               {encoding ? <span className="btn-inner"><div className="spin" />Encoding…</span> : "Start Encode"}
             </button>
