@@ -1881,11 +1881,8 @@ select:focus { border-color: var(--text-dim); }
 
 /* Small ⓘ icon button next to the Encoder label */
 .enc-info-btn {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 1px solid var(--border-2);
   background: none;
+  border: none;
   color: var(--text-dim);
   display: flex;
   align-items: center;
@@ -1894,12 +1891,10 @@ select:focus { border-color: var(--text-dim); }
   flex-shrink: 0;
   padding: 0;
   line-height: 1;
-  transition: border-color 0.14s, color 0.14s, background 0.14s;
+  transition: color 0.14s;
 }
 .enc-info-btn:hover {
-  border-color: var(--text-muted);
   color: var(--text);
-  background: var(--surface-2);
 }
 
 /* Backdrop */
