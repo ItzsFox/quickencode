@@ -1107,6 +1107,18 @@ select:focus { border-color: var(--text-dim); }
 .preset-btn .preset-icon { font-size: 12px; }
 .preset-btn .preset-size { font-size: 9.5px; color: var(--text-dim); font-weight: 500; }
 
+/* Wrapper span around Discord Ready when GPU is selected.
+   Pointer-events stay on so the tooltip (title) is still accessible,
+   but the inner button is disabled and the cursor signals not-allowed. */
+.preset-btn-wrapper--disabled {
+  display: inline-flex;
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+.preset-btn-wrapper--disabled .preset-btn {
+  pointer-events: none;
+}
+
 .btn-encode {
   padding: 7px 22px;
   background: var(--encode-bg);
