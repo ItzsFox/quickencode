@@ -148,8 +148,15 @@ function qualityInfo(q: number) {
   return             { label: "Very Low",         cls: "c0" };
 }
 function basename(p: string) { return p.split(/[\\\/]/).pop() ?? p; }
-function discordBr(dur: number) {
-  return Math.max(Math.floor((DISCORD_TARGET * 8 * 1024) / dur) - DISCORD_AUDIO, 80);
+/**
+ * Calculate the video bitrate budget for a Discord-ready export.
+ * Accounts for the actual number of active (non-deleted) audio tracks so that
+ * multi-track sources (e.g. separate game + mic tracks) don't eat into the
+ * video budget more than expected.
+ */
+function discordBr(dur: number, activeAudioTracks = 1) {
+  const totalAudioKbps = DISCORD_AUDIO * activeAudioTracks;
+  return Math.max(Math.floor((DISCORD_TARGET * 8 * 1024) / dur) - totalAudioKbps, 80);
 }
 function frameTs(i: number, duration: number) {
   return duration * (i + 0.5) / FRAME_COUNT;
@@ -754,7 +761,11 @@ export default function App() {
     const effectiveDuration = videoEdits
       ? videoEdits.trimEnd - videoEdits.trimStart
       : info.duration_secs;
-    const vbr = discordBr(effectiveDuration);
+    // Count only the audio tracks that will actually be encoded (not deleted)
+    const totalTracks   = info.audio_tracks?.length ?? 1;
+    const deletedCount  = videoEdits?.audioTracks.filter(t => t.deleted).length ?? 0;
+    const activeTracks  = Math.max(totalTracks - deletedCount, 1);
+    const vbr = discordBr(effectiveDuration, activeTracks);
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
@@ -815,10 +826,13 @@ export default function App() {
         const clipEdits = file.edits;
         let vbr: number, abr: number, res: string, f: string;
         if (discordMode) {
-          const effectiveDur = clipEdits
+          const effectiveDur  = clipEdits
             ? clipEdits.trimEnd - clipEdits.trimStart
             : infoRaw.duration_secs;
-          vbr = discordBr(effectiveDur); abr = DISCORD_AUDIO; res = resolution; f = fps;
+          const totalTracks   = infoRaw.audio_tracks?.length ?? 1;
+          const deletedCount  = clipEdits?.audioTracks.filter(t => t.deleted).length ?? 0;
+          const activeTracks  = Math.max(totalTracks - deletedCount, 1);
+          vbr = discordBr(effectiveDur, activeTracks); abr = DISCORD_AUDIO; res = resolution; f = fps;
         } else {
           const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
           vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
