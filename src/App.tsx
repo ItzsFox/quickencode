@@ -766,10 +766,14 @@ export default function App() {
     const deletedCount  = videoEdits?.audioTracks.filter(t => t.deleted).length ?? 0;
     const activeTracks  = Math.max(totalTracks - deletedCount, 1);
     const vbr = discordBr(effectiveDuration, activeTracks);
+    // Pass the total audio budget (96 kbps × active tracks) so Rust distributes
+    // it correctly per-track. Without this, multi-track encodes exceed 10 MB
+    // because FFmpeg encodes each track at the full 96 kbps rate.
+    const totalAudioKbps = DISCORD_AUDIO * activeTracks;
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
     if (!out) return;
-    runEncode(vbr, DISCORD_AUDIO, resolution, fps, out, codec, gpuEncoder);
+    runEncode(vbr, totalAudioKbps, resolution, fps, out, codec, gpuEncoder);
   };
 
   const handleCancelEncode = async () => {
@@ -832,7 +836,12 @@ export default function App() {
           const totalTracks   = infoRaw.audio_tracks?.length ?? 1;
           const deletedCount  = clipEdits?.audioTracks.filter(t => t.deleted).length ?? 0;
           const activeTracks  = Math.max(totalTracks - deletedCount, 1);
-          vbr = discordBr(effectiveDur, activeTracks); abr = DISCORD_AUDIO; res = resolution; f = fps;
+          vbr = discordBr(effectiveDur, activeTracks);
+          // Pass total audio budget so Rust encodes each track at the correct
+          // per-track rate (totalAudioKbps / activeTracks) rather than full 96k.
+          abr = DISCORD_AUDIO * activeTracks;
+          res = resolution;
+          f = fps;
         } else {
           const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
           vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
