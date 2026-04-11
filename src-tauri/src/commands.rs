@@ -973,7 +973,18 @@ pub async fn encode_video_with_progress(
     tauri::async_runtime::spawn_blocking(move || {
         let ffmpeg      = resolve_bin(&app, "ffmpeg")?;
         let video_bv    = format!("{}k", video_bitrate_kbps);
-        let audio_ba    = format!("{}k", audio_bitrate_kbps);
+
+        let real_track_count = if total_audio_tracks == 0 { 1 } else { total_audio_tracks };
+        let active_audio: Vec<usize> = (0..real_track_count)
+            .filter(|i| !deleted_tracks.contains(i))
+            .collect();
+
+        // Divide total audio budget by active track count so -b:a is per-track
+        // and the total audio bitrate stays within the preset's target.
+        let active_count = active_audio.len().max(1) as u32;
+        let per_track_kbps = (audio_bitrate_kbps / active_count).max(1);
+        let audio_ba    = format!("{}k", per_track_kbps);
+
         let passlog     = std::env::temp_dir().join("qe_passlog");
         let passlog_str = passlog.to_str().unwrap().to_string();
 
@@ -1000,11 +1011,6 @@ pub async fn encode_video_with_progress(
         let vf_arg: Vec<String> = if !vf_parts.is_empty() {
             vec!["-vf".into(), vf_parts.join(",")]
         } else { vec![] };
-
-        let real_track_count = if total_audio_tracks == 0 { 1 } else { total_audio_tracks };
-        let active_audio: Vec<usize> = (0..real_track_count)
-            .filter(|i| !deleted_tracks.contains(i))
-            .collect();
 
         let (audio_map_args, used_filter_complex) =
             build_audio_args(&active_audio, &volume_map, merge_audio_tracks, &vf_arg);
