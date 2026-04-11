@@ -520,18 +520,28 @@ export default function App() {
   }, []);
 
   // Recompute accel options whenever codec or detected GPUs change.
-  // ALL compatible GPUs are shown so the user can manually switch between them.
-  // The best one (first GPU found) is auto-selected, but the others stay available.
+  // GPU options are listed first (best → others), CPU last.
+  // The best GPU is auto-selected; if the user's current selection is still
+  // valid for the new codec it is preserved instead.
   useEffect(() => {
-    const opts: AccelOption[] = [{ id: "cpu", label: "Software (CPU)" }];
+    const gpuOpts: AccelOption[] = [];
     for (const gpu of gpuOptions) {
       if (gpu.supported_codecs.includes(codec)) {
-        opts.push({ id: gpu.id, label: gpu.label });
+        gpuOpts.push({ id: gpu.id, label: gpu.label });
       } else if (codec === "av1" && (gpu.id === "amf" || gpu.id === "videotoolbox")) {
         // These GPUs don't support AV1 natively but fall back to HEVC — still offer them
-        opts.push({ id: gpu.id, label: `${gpu.label} (HEVC fallback)` });
+        gpuOpts.push({ id: gpu.id, label: `${gpu.label} (HEVC fallback)` });
       }
     }
+    // Mark the best GPU as recommended
+    if (gpuOpts.length > 0) {
+      gpuOpts[0] = { ...gpuOpts[0], label: `${gpuOpts[0].label} · Recommended` };
+    }
+    // GPUs first, CPU at the bottom
+    const opts: AccelOption[] = [
+      ...gpuOpts,
+      { id: "cpu", label: "Software (CPU)" },
+    ];
     setAccelOptions(opts);
     // Auto-select best: prefer first GPU option over CPU, but keep current
     // selection if it's still in the new list (e.g. user switched codec while
@@ -540,7 +550,7 @@ export default function App() {
       const stillValid = opts.some(o => o.id === prev);
       if (stillValid) return prev;
       // Previous selection no longer valid for this codec — pick best available
-      return opts.find(o => o.id !== "cpu")?.id ?? "cpu";
+      return gpuOpts[0]?.id ?? "cpu";
     });
   }, [codec, gpuOptions]);
 
