@@ -587,6 +587,12 @@ body {
 }
 .batch-add-btn:disabled { opacity: 0.28; cursor: not-allowed; }
 
+/* Compact variant for topbar use */
+.batch-add-btn--sm {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 /* ══════════════════════════════════════════
    MAIN EDITOR
    ══════════════════════════════════════════ */
