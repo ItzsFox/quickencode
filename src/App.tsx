@@ -390,29 +390,29 @@ function QualitySettings({
               <option value="24">24 fps</option>
             </select>
           </div>
-            <div className="setting">
-              <div className="setting-label-row">
-                <span>Encoder</span>
-                <button
-                  className="enc-info-btn"
-                  onClick={e => { e.preventDefault(); e.stopPropagation(); onOpenEncoderInfo(); }}
-                  title="Learn about encoders"
-                  aria-label="Encoder information"
-                >
-                  <InfoIcon />
-                </button>
-              </div>
-              <select value={codec} onChange={e => onCodec(e.target.value)}>
-                <option value="h264">H.264</option>
-                <option value="h265">H.265 (HEVC)</option>
-                <option value="av1">AV1</option>
-              </select>
+          <div className="setting">
+            <div className="setting-label-row">
+              <span>Encoder</span>
+              <button
+                className="enc-info-btn"
+                onClick={e => { e.preventDefault(); e.stopPropagation(); onOpenEncoderInfo(); }}
+                title="Learn about encoders"
+                aria-label="Encoder information"
+              >
+                <InfoIcon />
+              </button>
             </div>
+            <select value={codec} onChange={e => onCodec(e.target.value)}>
+              <option value="h264">H.264</option>
+              <option value="h265">H.265 (HEVC)</option>
+              <option value="av1">AV1</option>
+            </select>
+          </div>
           <div className="setting"><label>Hardware Accel</label>
             <select
               value={gpuEncoder}
               onChange={e => onGpuEncoder(e.target.value)}
-              title="GPU acceleration backend. Options update based on the selected encoder."
+              title="GPU acceleration backend. Auto-selects the best available for the chosen encoder."
             >
               {accelOptions.map(o => (
                 <option key={o.id} value={o.id}>{o.label}</option>
@@ -471,7 +471,7 @@ export default function App() {
   const [codec, setCodec]           = useState<string>("h264");
   // gpuEncoder: "cpu" = software, or "nvenc" / "qsv" / "amf" / "videotoolbox"
   const [gpuEncoder, setGpuEncoder] = useState("cpu");
-  // accelOptions: filtered hardware accel choices for the current codec
+  // accelOptions: ALL compatible hardware accel choices for the current codec
   const [accelOptions, setAccelOptions] = useState<AccelOption[]>([{ id: "cpu", label: "Software (CPU)" }]);
   // gpuOptions: all detected GPU encoders (from probe_gpu_encoders)
   const [gpuOptions, setGpuOptions] = useState<GpuEncoderInfo[]>([]);
@@ -519,7 +519,9 @@ export default function App() {
       .catch(() => { /* no GPU info — stay on cpu */ });
   }, []);
 
-  // Recompute accel options whenever codec or detected GPUs change
+  // Recompute accel options whenever codec or detected GPUs change.
+  // ALL compatible GPUs are shown so the user can manually switch between them.
+  // The best one (first GPU found) is auto-selected, but the others stay available.
   useEffect(() => {
     const opts: AccelOption[] = [{ id: "cpu", label: "Software (CPU)" }];
     for (const gpu of gpuOptions) {
@@ -531,9 +533,15 @@ export default function App() {
       }
     }
     setAccelOptions(opts);
-    // Auto-select: prefer first GPU option, otherwise CPU
-    const best = opts.find(o => o.id !== "cpu") ?? opts[0];
-    setGpuEncoder(best.id);
+    // Auto-select best: prefer first GPU option over CPU, but keep current
+    // selection if it's still in the new list (e.g. user switched codec while
+    // already on NVENC and NVENC still supports the new codec).
+    setGpuEncoder(prev => {
+      const stillValid = opts.some(o => o.id === prev);
+      if (stillValid) return prev;
+      // Previous selection no longer valid for this codec — pick best available
+      return opts.find(o => o.id !== "cpu")?.id ?? "cpu";
+    });
   }, [codec, gpuOptions]);
 
   const base    = resolution === "original" ? (info?.bitrate_kbps ?? 5000) : RES_BITRATES[resolution];
