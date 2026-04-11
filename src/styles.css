@@ -1862,3 +1862,205 @@ select:focus { border-color: var(--text-dim); }
 
 /* Suppress the old badge repurpose — tooltip replaces it */
 .gpu-badge { display: none; }
+
+/* ══════════════════════════════════════════
+   ENCODER INFO BUTTON & MODAL
+   ══════════════════════════════════════════ */
+
+/* Label row with the ⓘ button inline */
+.setting-label-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+}
+
+/* Small ⓘ icon button next to the Encoder label */
+.enc-info-btn {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border-2);
+  background: none;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.enc-info-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* Backdrop */
+.enc-info-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--overlay-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(12px);
+}
+
+/* Modal panel */
+.enc-info-modal {
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Modal header */
+.enc-info-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 11px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.enc-info-modal-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.1px;
+}
+.enc-info-close {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.14s;
+  border-radius: var(--radius-sm);
+}
+.enc-info-close:hover { color: var(--text); background: var(--surface-2); }
+
+/* Scrollable list area */
+.enc-info-list-scroll {
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.enc-info-list-scroll::-webkit-scrollbar { width: 3px; }
+.enc-info-list-scroll::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
+
+/* Divider between encoder cards */
+.enc-info-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 10px 0;
+}
+
+/* Each encoder card */
+.enc-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Card header: name + tagline */
+.enc-info-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.enc-info-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.1px;
+}
+.enc-info-tagline {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-top: 2px;
+}
+
+/* Pros / Cons sections */
+.enc-info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.enc-info-section-title {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.enc-info-pro { color: var(--success); }
+.enc-info-con { color: var(--warn); }
+
+.enc-info-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.enc-info-items li {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  padding-left: 10px;
+  position: relative;
+}
+.enc-info-items li::before {
+  content: '·';
+  position: absolute;
+  left: 2px;
+  color: var(--text-faint);
+}
+
+/* Best for row */
+.enc-info-best {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 6px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.enc-info-best-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
