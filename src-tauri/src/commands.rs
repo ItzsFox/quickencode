@@ -410,10 +410,12 @@ fn resolve_video_codec(
             "-b:v".into(), video_bv.into(),
         ], true),
 
-        // H.264 CPU — 2-pass
+        // H.264 CPU — 2-pass with maxrate/bufsize to enforce the size ceiling
         (_, _) => (vec![
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv.into(),
+            "-maxrate".into(), video_bv.into(),
+            "-bufsize".into(), video_bv.into(),
         ], false),
     }
 }
@@ -1119,6 +1121,8 @@ pub async fn encode_video_with_progress(
         pass1.extend([
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv.clone(),
+            "-maxrate".into(), video_bv.clone(),
+            "-bufsize".into(), video_bv.clone(),
             "-pass".into(), "1".into(),
             "-passlogfile".into(), passlog_str.clone(),
             "-progress".into(), "pipe:1".into(),
@@ -1192,7 +1196,9 @@ pub async fn encode_video_with_progress(
         pass2.extend(audio_map_args);
         pass2.extend([
             "-c:v".into(), "libx264".into(),
-            "-b:v".into(), video_bv,
+            "-b:v".into(), video_bv.clone(),
+            "-maxrate".into(), video_bv.clone(),
+            "-bufsize".into(), video_bv.clone(),
             "-pass".into(), "2".into(),
             "-passlogfile".into(), passlog_str,
             "-c:a".into(), "aac".into(),
