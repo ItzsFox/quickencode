@@ -43,8 +43,9 @@
       "binaries/ffprobe"
     ],
     "windows": {
-      "nsis": {
-        "installerHooks": "nsis/installer-hooks.nsi"
+      "wix": {
+        "fragmentPaths": ["wix/context-menu.wxs"],
+        "componentRefs": ["MP4ContextMenu"]
       }
     }
   }
