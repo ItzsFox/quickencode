@@ -45,7 +45,7 @@
     "windows": {
       "wix": {
         "fragmentPaths": ["wix/context-menu.wxs"],
-        "componentRefs": ["MP4ContextMenuComp"]
+        "componentRefs": ["MP4ContextMenu"]
       }
     }
   }
