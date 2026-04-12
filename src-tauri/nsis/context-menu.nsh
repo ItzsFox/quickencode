@@ -7,8 +7,8 @@
 ;   [icon] Quick Encode                    ►
 ;               Add to Quick Encode
 ;               --------------------------------
-;               Encode for Discord Ready
-;               Encode for Discord Ready (AV1)
+;               Encode with Discord Ready
+;               Encode with Discord Ready (AV1)
 ;
 ; Usage:
 ;   !include "context-menu.nsh"
@@ -52,24 +52,22 @@ Function RegisterContextMenu
         "" '"$INSTDIR\quickencode.exe" --file "%1"'
 
     ; ---- Separator --------------------------------------------------------
-    ; Windows shell uses a key named with a leading "-" or "separator" to draw
-    ; a divider line between groups.
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\02_Sep" \
         "CommandFlags" "0x40"
 
-    ; ---- 2. Encode for Discord Ready (H.264) ------------------------------
+    ; ---- 2. Encode with Discord Ready (H.264) -----------------------------
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\03_Discord" \
-        "" "Encode for Discord Ready"
+        "" "Encode with Discord Ready"
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\03_Discord\command" \
         "" '"$INSTDIR\quickencode.exe" --file "%1" --preset discord'
 
-    ; ---- 3. Encode for Discord Ready (AV1) --------------------------------
+    ; ---- 3. Encode with Discord Ready (AV1) --------------------------------
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\04_DiscordAV1" \
-        "" "Encode for Discord Ready (AV1)"
+        "" "Encode with Discord Ready (AV1)"
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\04_DiscordAV1\command" \
         "" '"$INSTDIR\quickencode.exe" --file "%1" --preset discord-av1'
