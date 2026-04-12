@@ -1,48 +1,56 @@
 mod commands;
 
+use serde::Serialize;
 use tauri::{Emitter, Manager};
 
-/// Emitted to the frontend when the app is launched/focused with a file path
-/// via the right-click "Encode for Discord" context menu entry.
+/// Emitted to the frontend when the app is launched via the right-click
+/// context menu. Carries both the file path and the chosen preset.
 pub const OPEN_FILE_EVENT: &str = "open-file";
+
+#[derive(Serialize, Clone)]
+pub struct OpenFilePayload {
+    pub path: String,
+    /// Optional preset name passed via --preset <name>.
+    /// e.g. "discord", "discord-av1"
+    /// None means the file was opened with no preset (plain import).
+    pub preset: Option<String>,
+}
+
+/// Parse a named flag value from an argv slice, e.g. --file <value>
+fn parse_arg(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2)
+        .find(|w| w[0] == flag)
+        .map(|w| w[1].clone())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Collect CLI args: look for --file <path> passed by the shell handler
-    let file_arg: Option<String> = {
-        let args: Vec<String> = std::env::args().collect();
-        args.windows(2)
-            .find(|w| w[0] == "--file")
-            .map(|w| w[1].clone())
-    };
+    let args: Vec<String> = std::env::args().collect();
+    let file_arg   = parse_arg(&args, "--file");
+    let preset_arg = parse_arg(&args, "--preset");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // Called when a second instance is launched (e.g. user right-clicks
-            // another file while QuickEncode is already open).
-            // We bring the existing window to focus and forward the file path.
+            // Second instance launched — bring existing window to focus
+            // and forward the file + preset.
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
                 let _ = window.unminimize();
             }
-            // Parse --file from the new instance's args
-            if let Some(path) = argv.windows(2)
-                .find(|w| w[0] == "--file")
-                .map(|w| w[1].clone())
-            {
-                let _ = app.emit(OPEN_FILE_EVENT, path);
+            if let Some(path) = parse_arg(argv, "--file") {
+                let preset = parse_arg(argv, "--preset");
+                let _ = app.emit(OPEN_FILE_EVENT, OpenFilePayload { path, preset });
             }
         }))
         .setup(move |app| {
-            // If this first instance was launched with --file, emit the event
-            // after the window is ready.
             if let Some(path) = file_arg {
                 let handle = app.handle().clone();
+                let preset = preset_arg.clone();
                 // Small delay so the webview has time to mount its listener
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(800));
-                    let _ = handle.emit(OPEN_FILE_EVENT, path);
+                    let _ = handle.emit(OPEN_FILE_EVENT, OpenFilePayload { path, preset });
                 });
             }
             Ok(())
