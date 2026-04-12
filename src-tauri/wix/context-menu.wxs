@@ -7,7 +7,7 @@
         <!-- Parent submenu entry: "Quick Encode" with flyout arrow -->
         <RegistryKey Root="HKCU"
                      Key="Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode">
-          <RegistryValue Type="string" Name="MUIVerb"     Value="Quick Encode" />
+          <RegistryValue Type="string" Name="MUIVerb"     Value="quick encode." />
           <RegistryValue Type="string" Name="SubCommands" Value="" />
           <RegistryValue Type="string" Name="Icon"        Value="[INSTALLDIR]quickencode.exe,0" />
         </RegistryKey>
@@ -21,7 +21,7 @@
         <!-- 1. Add to Quick Encode (plain import, no preset) -->
         <RegistryKey Root="HKCU"
                      Key="Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\01_Import">
-          <RegistryValue Type="string" Value="Add to Quick Encode" />
+          <RegistryValue Type="string" Value="Add to quick encode." />
         </RegistryKey>
         <RegistryKey Root="HKCU"
                      Key="Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\01_Import\command">
