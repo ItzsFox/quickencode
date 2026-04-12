@@ -42,9 +42,9 @@ interface BatchDoneResult {
   outputDir: string;
 }
 interface GpuEncoderInfo {
-  id:               string;   // "nvenc" | "qsv" | "amf" | "videotoolbox"
-  label:            string;   // e.g. "NVIDIA NVENC"
-  supported_codecs: string[]; // e.g. ["h264", "h265", "av1"]
+  id:               string;
+  label:            string;
+  supported_codecs: string[];
 }
 
 /** Payload emitted by the Rust backend for the open-file event */
@@ -123,7 +123,6 @@ const ENCODER_INFO: Record<string, EncoderInfo> = {
   },
 };
 
-// Ordered list of codec keys for the modal
 const ENCODER_ORDER = ["h264", "h265", "av1"] as const;
 
 function fmtTime(s: number) {
@@ -154,12 +153,6 @@ function qualityInfo(q: number) {
   return             { label: "Very Low",         cls: "c0" };
 }
 function basename(p: string) { return p.split(/[\\\/]/).pop() ?? p; }
-/**
- * Calculate the video bitrate budget for a Discord-ready export.
- * Accounts for the actual number of active (non-deleted) audio tracks so that
- * multi-track sources (e.g. separate game + mic tracks) don't eat into the
- * video budget more than expected.
- */
 function discordBr(dur: number, activeAudioTracks = 1) {
   const totalAudioKbps = DISCORD_AUDIO * activeAudioTracks;
   return Math.max(Math.floor((DISCORD_TARGET * 8 * 1024) / dur) - totalAudioKbps, 80);
@@ -172,7 +165,6 @@ function isVideo(p: string) {
   return VIDEO_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
-/** Human-readable short label for the active encoder shown in the preview tag */
 function gpuShortLabel(codec: string, gpuEncoder: string): string {
   const codecLabel = codec === "av1" ? "AV1" : codec === "h265" ? "H.265" : "H.264";
   switch (gpuEncoder) {
@@ -184,7 +176,6 @@ function gpuShortLabel(codec: string, gpuEncoder: string): string {
   }
 }
 
-/** Build a short badge string for a clip's edits, e.g. "0:12 · −1 audio · merged" */
 function editsBadgeForClip(edits: VideoEdits | null, duration: number): string | null {
   if (!edits) return null;
   const parts: string[] = [];
@@ -209,7 +200,6 @@ const DiscordIcon = () => (
   </svg>
 );
 
-/** Pencil edit icon */
 const EditIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -217,7 +207,6 @@ const EditIcon = () => (
   </svg>
 );
 
-/** Info circle icon */
 const InfoIcon = () => (
   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <circle cx="12" cy="12" r="10" />
@@ -226,7 +215,7 @@ const InfoIcon = () => (
   </svg>
 );
 
-type Screen = "drop" | "loading" | "editor" | "batch" | "done" | "batch-done";
+type Screen = "drop" | "loading" | "editor" | "batch" | "done" | "batch-done" | "direct-encode";
 
 // ── Sub-components lifted outside App to prevent remount on every render ──
 
@@ -261,12 +250,11 @@ function ThemeBtn({ theme, onToggle }: ThemeBtnProps) {
   );
 }
 
-// ── Encoder Info Modal — shows ALL encoders as a scrollable list ──
+// ── Encoder Info Modal ──
 interface EncoderInfoModalProps {
   onClose: () => void;
 }
 function EncoderInfoModal({ onClose }: EncoderInfoModalProps) {
-  // Close on Escape key
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
@@ -294,21 +282,18 @@ function EncoderInfoModal({ onClose }: EncoderInfoModalProps) {
                       <div className="enc-info-tagline">{info.tagline}</div>
                     </div>
                   </div>
-
                   <div className="enc-info-section">
                     <div className="enc-info-section-title enc-info-pro">✓ Strengths</div>
                     <ul className="enc-info-items">
                       {info.pros.map((p, i) => <li key={i}>{p}</li>)}
                     </ul>
                   </div>
-
                   <div className="enc-info-section">
                     <div className="enc-info-section-title enc-info-con">✕ Limitations</div>
                     <ul className="enc-info-items">
                       {info.cons.map((c, i) => <li key={i}>{c}</li>)}
                     </ul>
                   </div>
-
                   <div className="enc-info-best">
                     <span className="enc-info-best-label">Best for</span>
                     <span>{info.bestFor}</span>
@@ -425,7 +410,7 @@ function QualitySettings({
             <select
               value={gpuEncoder}
               onChange={e => onGpuEncoder(e.target.value)}
-              title="GPU acceleration backend. Auto-selects the best available for the chosen encoder."
+              title="GPU acceleration backend."
             >
               {accelOptions.map(o => (
                 <option key={o.id} value={o.id}>{o.label}</option>
@@ -438,7 +423,6 @@ function QualitySettings({
   );
 }
 
-// ─────────────────────────────────────────────────────────
 const CancelIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <line x1="18" y1="6" x2="6" y2="18" />
@@ -480,13 +464,9 @@ export default function App() {
   const [quality, setQuality]       = useState(75);
   const [audio, setAudio]           = useState(128);
   const [fps, setFps]               = useState("original");
-  // codec: selected encoder family
   const [codec, setCodec]           = useState<string>("h264");
-  // gpuEncoder: "cpu" = software, or "nvenc" / "qsv" / "amf" / "videotoolbox"
   const [gpuEncoder, setGpuEncoder] = useState("cpu");
-  // accelOptions: ALL compatible hardware accel choices for the current codec
   const [accelOptions, setAccelOptions] = useState<AccelOption[]>([{ id: "cpu", label: "Software (CPU)" }]);
-  // gpuOptions: all detected GPU encoders (from probe_gpu_encoders)
   const [gpuOptions, setGpuOptions] = useState<GpuEncoderInfo[]>([]);
   const [encoding, setEncoding]     = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -495,10 +475,8 @@ export default function App() {
   const [status, setStatus]         = useState("");
   const [doneResult, setDoneResult] = useState<DoneResult | null>(null);
 
-  // Encoder info modal
   const [encoderInfoOpen, setEncoderInfoOpen] = useState(false);
 
-  // Video editor state (single-clip)
   const [showEditor, setShowEditor] = useState(false);
   const [videoEdits, setVideoEdits] = useState<VideoEdits | null>(null);
 
@@ -507,15 +485,17 @@ export default function App() {
   const [batchRunning, setBatchRunning]       = useState(false);
   const [batchDoneResult, setBatchDoneResult] = useState<BatchDoneResult | null>(null);
 
-  // Batch per-clip editor state
   const [editingBatchIdx, setEditingBatchIdx] = useState<number>(-1);
   const [batchEditInfo, setBatchEditInfo]     = useState<VideoInfo | null>(null);
 
+  // State for the direct-encode screen (context menu Discord Ready shortcut)
+  const [directFile, setDirectFile]         = useState("");
+  const [directPreset, setDirectPreset]     = useState("");
+  const [directStatus, setDirectStatus]     = useState<"idle" | "probing" | "saving" | "encoding" | "done" | "error">("idle");
+  const [directError, setDirectError]       = useState("");
+
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
-
-  // Pending preset to run after loadFile completes (e.g. "discord" from context menu)
-  const pendingPresetRef = useRef<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -531,36 +511,25 @@ export default function App() {
       .then(detected => {
         if (!mountedRef.current) return;
         setGpuOptions(detected);
-        // Initial accel options will be computed by the codec-change effect below
       })
-      .catch(() => { /* no GPU info — stay on cpu */ });
+      .catch(() => {});
   }, []);
 
-  // Recompute accel options whenever codec or detected GPUs change.
-  // GPU options are listed first (best → others), CPU last.
-  // Always default to CPU ("cpu"). The user can manually select a GPU if desired.
+  // Recompute accel options whenever codec or detected GPUs change
   useEffect(() => {
     const gpuOpts: AccelOption[] = [];
     for (const gpu of gpuOptions) {
       if (gpu.supported_codecs.includes(codec)) {
         gpuOpts.push({ id: gpu.id, label: gpu.label });
       } else if (codec === "av1" && (gpu.id === "amf" || gpu.id === "videotoolbox")) {
-        // These GPUs don't support AV1 natively but fall back to HEVC — still offer them
         gpuOpts.push({ id: gpu.id, label: `${gpu.label} (HEVC fallback)` });
       }
     }
-    // Mark the best GPU as recommended
     if (gpuOpts.length > 0) {
       gpuOpts[0] = { ...gpuOpts[0], label: `${gpuOpts[0].label} · Recommended` };
     }
-    // GPUs first, CPU at the bottom
-    const opts: AccelOption[] = [
-      ...gpuOpts,
-      { id: "cpu", label: "Software (CPU)" },
-    ];
+    const opts: AccelOption[] = [...gpuOpts, { id: "cpu", label: "Software (CPU)" }];
     setAccelOptions(opts);
-    // Always default to CPU. Only preserve the current GPU selection if the user
-    // has already manually chosen a GPU that is still valid for the new codec.
     setGpuEncoder(prev => {
       if (prev === "cpu") return "cpu";
       const stillValid = opts.some(o => o.id === prev && o.id !== "cpu");
@@ -633,60 +602,94 @@ export default function App() {
       const b = resolution === "original" ? videoInfo.bitrate_kbps : (RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps);
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
       loadEncodedFrame(0, vbr, resolution, fps, codec, gpuEncoder);
-
-      // If a preset was queued from the context menu, fire it now
-      const preset = pendingPresetRef.current;
-      pendingPresetRef.current = null;
-      if (preset === "discord" || preset === "discord-av1") {
-        const discordCodec = preset === "discord-av1" ? "av1" : "h264";
-        const activeTracks = Math.max(videoInfo.audio_tracks?.length ?? 1, 1);
-        const vbrDisc = discordBr(videoInfo.duration_secs, activeTracks);
-        const totalAudioKbps = DISCORD_AUDIO * activeTracks;
-        const defaultName = path.split(/[\\\/]/).pop()?.replace(/\.[^.]+$/, "") + "_discord.mp4";
-        const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
-        if (out) {
-          // runEncode reads state, so we call it imperatively via the refs below
-          setEncoding(true);
-          setCancelling(false);
-          setProgress({ percent: 0, eta_secs: 0, pass: 1 });
-          try {
-            await invoke("encode_video_with_progress", {
-              input:            path,
-              output:           out,
-              resolution:       resolution,
-              videoBitrateKbps: vbrDisc,
-              audioBitrateKbps: totalAudioKbps,
-              fps:              fps,
-              durationSecs:     videoInfo.duration_secs,
-              trimStart:        null,
-              trimEnd:          null,
-              deletedTracks:    [],
-              volumeMap:        {},
-              totalAudioTracks: videoInfo.audio_tracks?.length ?? 1,
-              mergeAudioTracks: false,
-              codec:            discordCodec,
-              gpuEncoder:       "cpu",
-            });
-            let finalMb = 0;
-            try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
-            setDoneResult({ outputPath: out, originalMb: videoInfo.size_mb, finalMb });
-            setScreen("done");
-          } catch (e) {
-            const msg = String(e);
-            if (msg !== "cancelled") setStatus(`❌ ${msg}`);
-            setScreen("editor");
-          } finally {
-            setEncoding(false);
-            setCancelling(false);
-            setProgress(null);
-          }
-        }
-      }
     } catch (e) {
       setStatus(`❌ ${e}`);
       setScreen("drop");
     }
   }, [resolution, quality, fps, codec, gpuEncoder, loadEncodedFrame]);
+
+  // ── Direct-encode: runs immediately for context-menu Discord presets ──────
+  // Skips frame extraction entirely. Flow: probe info → save dialog → encode.
+  const runDirectEncode = useCallback(async (path: string, preset: string) => {
+    setDirectFile(path);
+    setDirectPreset(preset);
+    setScreen("direct-encode");
+    setDirectStatus("probing");
+    setDirectError("");
+    setProgress(null);
+    setDoneResult(null);
+
+    let videoInfo: VideoInfo;
+    try {
+      videoInfo = await invoke<VideoInfo>("get_video_info", { input: path });
+    } catch (e) {
+      setDirectStatus("error");
+      setDirectError(`Could not read file: ${e}`);
+      return;
+    }
+
+    const discordCodec = preset === "discord-av1" ? "av1" : "h264";
+    const activeTracks = Math.max(videoInfo.audio_tracks?.length ?? 1, 1);
+    const vbr = discordBr(videoInfo.duration_secs, activeTracks);
+    const totalAudioKbps = DISCORD_AUDIO * activeTracks;
+    const defaultName = basename(path).replace(/\.[^.]+$/, "") + "_discord.mp4";
+
+    setDirectStatus("saving");
+    let out: string | null = null;
+    try {
+      out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] }) as string | null;
+    } catch {
+      out = null;
+    }
+
+    if (!out) {
+      // User cancelled the save dialog — go back to drop screen
+      setScreen("drop");
+      return;
+    }
+
+    setDirectStatus("encoding");
+    setEncoding(true);
+    setCancelling(false);
+    setProgress({ percent: 0, eta_secs: 0, pass: 1 });
+
+    try {
+      await invoke("encode_video_with_progress", {
+        input:            path,
+        output:           out,
+        resolution:       "original",
+        videoBitrateKbps: vbr,
+        audioBitrateKbps: totalAudioKbps,
+        fps:              "original",
+        durationSecs:     videoInfo.duration_secs,
+        trimStart:        null,
+        trimEnd:          null,
+        deletedTracks:    [],
+        volumeMap:        {},
+        totalAudioTracks: videoInfo.audio_tracks?.length ?? 1,
+        mergeAudioTracks: false,
+        codec:            discordCodec,
+        gpuEncoder:       "cpu",
+      });
+      let finalMb = 0;
+      try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
+      setDoneResult({ outputPath: out, originalMb: videoInfo.size_mb, finalMb });
+      setDirectStatus("done");
+      setScreen("done");
+    } catch (e) {
+      const msg = String(e);
+      if (msg === "cancelled") {
+        setScreen("drop");
+      } else {
+        setDirectStatus("error");
+        setDirectError(msg);
+      }
+    } finally {
+      setEncoding(false);
+      setCancelling(false);
+      setProgress(null);
+    }
+  }, []);
 
   const resolveDroppedPaths = useCallback(async (paths: string[]): Promise<string[]> => {
     const videos: string[] = [];
@@ -738,18 +741,30 @@ export default function App() {
     return () => unlisten?.();
   }, []);
 
-  // ── Listen for open-file events from the context menu / single-instance handler ──
+  // ── Stable open-file listener — never torn down, uses refs for callbacks ──
+  // Using refs avoids the race condition where the listener is re-registered
+  // mid-flight (while the 800ms backend delay is counting down) every time
+  // loadFile changes due to codec/quality/etc. state updates.
+  const loadFileRef        = useRef(loadFile);
+  const runDirectEncodeRef = useRef(runDirectEncode);
+  useEffect(() => { loadFileRef.current        = loadFile;        }, [loadFile]);
+  useEffect(() => { runDirectEncodeRef.current = runDirectEncode; }, [runDirectEncode]);
+
   useEffect(() => {
+    // Mounted once, never torn down — always calls the latest version via ref.
     let unlisten: (() => void) | undefined;
     listen<OpenFilePayload>("open-file", (ev) => {
       const { path, preset } = ev.payload;
       if (!path) return;
-      // Store the preset so loadFile can act on it after the file loads
-      pendingPresetRef.current = preset ?? null;
-      loadFile(path);
+      if (preset === "discord" || preset === "discord-av1") {
+        runDirectEncodeRef.current(path, preset);
+      } else {
+        loadFileRef.current(path);
+      }
     }).then(fn => { unlisten = fn; });
     return () => unlisten?.();
-  }, [loadFile]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // empty deps — intentionally stable
 
   const pickFiles = async () => {
     const result = await open({
@@ -780,8 +795,8 @@ export default function App() {
     setCancelling(false);
     setProgress({ percent: 0, eta_secs: 0, pass: 1 });
     try {
-      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                  ? videoEdits.trimStart : null;
-      const trimEndArg   = (videoEdits && videoEdits.trimEnd < info.duration_secs)   ? videoEdits.trimEnd   : null;
+      const trimStartArg = (videoEdits && videoEdits.trimStart > 0)                ? videoEdits.trimStart : null;
+      const trimEndArg   = (videoEdits && videoEdits.trimEnd < info.duration_secs) ? videoEdits.trimEnd   : null;
       const deletedTracks  = videoEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
       const volumeMap      = videoEdits?.audioTracks
         .filter(t => !t.deleted && t.volume !== 100)
@@ -812,9 +827,7 @@ export default function App() {
       setScreen("done");
     } catch (e) {
       const msg = String(e);
-      if (msg !== "cancelled") {
-        setStatus(`❌ ${msg}`);
-      }
+      if (msg !== "cancelled") setStatus(`❌ ${msg}`);
     } finally {
       setEncoding(false);
       setCancelling(false);
@@ -828,14 +841,10 @@ export default function App() {
     const effectiveDuration = videoEdits
       ? videoEdits.trimEnd - videoEdits.trimStart
       : info.duration_secs;
-    // Count only the audio tracks that will actually be encoded (not deleted)
     const totalTracks   = info.audio_tracks?.length ?? 1;
     const deletedCount  = videoEdits?.audioTracks.filter(t => t.deleted).length ?? 0;
     const activeTracks  = Math.max(totalTracks - deletedCount, 1);
     const vbr = discordBr(effectiveDuration, activeTracks);
-    // Pass the total audio budget (96 kbps × active tracks) so Rust distributes
-    // it correctly per-track. Without this, multi-track encodes exceed 10 MB
-    // because FFmpeg encodes each track at the full 96 kbps rate.
     const totalAudioKbps = DISCORD_AUDIO * activeTracks;
     const defaultName = basename(filePath).replace(/\.[^.]+$/, "") + "_discord.mp4";
     const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
@@ -845,14 +854,9 @@ export default function App() {
 
   const handleCancelEncode = async () => {
     setCancelling(true);
-    try {
-      await invoke("cancel_encode");
-    } catch {
-      // ignore — the encode may have already finished
-    }
+    try { await invoke("cancel_encode"); } catch {}
   };
 
-  // ── Batch per-clip edit ─────────────────────────────────────────────────
   const openBatchClipEditor = async (idx: number) => {
     const file = batchFiles[idx];
     if (!file) return;
@@ -877,7 +881,6 @@ export default function App() {
     setEditingBatchIdx(-1);
     setBatchEditInfo(null);
   };
-  // ────────────────────────────────────────────────────────────────────────
 
   const runBatch = async (outputDir: string, discordMode: boolean) => {
     setBatchRunning(true);
@@ -897,15 +900,11 @@ export default function App() {
         const clipEdits = file.edits;
         let vbr: number, abr: number, res: string, f: string;
         if (discordMode) {
-          const effectiveDur  = clipEdits
-            ? clipEdits.trimEnd - clipEdits.trimStart
-            : infoRaw.duration_secs;
+          const effectiveDur  = clipEdits ? clipEdits.trimEnd - clipEdits.trimStart : infoRaw.duration_secs;
           const totalTracks   = infoRaw.audio_tracks?.length ?? 1;
           const deletedCount  = clipEdits?.audioTracks.filter(t => t.deleted).length ?? 0;
           const activeTracks  = Math.max(totalTracks - deletedCount, 1);
           vbr = discordBr(effectiveDur, activeTracks);
-          // Pass total audio budget so Rust encodes each track at the correct
-          // per-track rate (totalAudioKbps / activeTracks) rather than full 96k.
           abr = DISCORD_AUDIO * activeTracks;
           res = resolution;
           f = fps;
@@ -913,8 +912,8 @@ export default function App() {
           const b = resolution === "original" ? infoRaw.bitrate_kbps : (RES_BITRATES[resolution] ?? infoRaw.bitrate_kbps);
           vbr = Math.max(Math.round(b * (quality / 100)), 80); abr = audio; res = resolution; f = fps;
         }
-        const trimStartArg      = clipEdits && clipEdits.trimStart > 0                      ? clipEdits.trimStart : null;
-        const trimEndArg        = clipEdits && clipEdits.trimEnd < infoRaw.duration_secs     ? clipEdits.trimEnd   : null;
+        const trimStartArg      = clipEdits && clipEdits.trimStart > 0                  ? clipEdits.trimStart : null;
+        const trimEndArg        = clipEdits && clipEdits.trimEnd < infoRaw.duration_secs ? clipEdits.trimEnd   : null;
         const deletedTracks     = clipEdits?.audioTracks.filter(t => t.deleted).map(t => t.index) ?? [];
         const volumeMap         = clipEdits?.audioTracks
           .filter(t => !t.deleted && t.volume !== 100)
@@ -926,15 +925,10 @@ export default function App() {
           input: file.path, output: outFile,
           resolution: res, videoBitrateKbps: vbr,
           audioBitrateKbps: abr, fps: f,
-          durationSecs,
-          trimStart:        trimStartArg,
-          trimEnd:          trimEndArg,
-          deletedTracks,
-          volumeMap,
+          durationSecs, trimStart: trimStartArg, trimEnd: trimEndArg,
+          deletedTracks, volumeMap,
           totalAudioTracks: infoRaw.audio_tracks?.length ?? 1,
-          mergeAudioTracks,
-          codec,
-          gpuEncoder,
+          mergeAudioTracks, codec, gpuEncoder,
         });
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "done" } : bf));
         succeeded++;
@@ -942,19 +936,14 @@ export default function App() {
         const msg = String(e);
         if (msg === "cancelled") {
           setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: "Cancelled" } : bf));
-          setBatchRunning(false);
-          setBatchProgress(null);
-          setCancelling(false);
-          setProgress(null);
+          setBatchRunning(false); setBatchProgress(null); setCancelling(false); setProgress(null);
           return;
         }
         setBatchFiles(prev => prev.map((bf, idx) => idx === i ? { ...bf, status: "error", msg: String(e) } : bf));
         failed++;
       }
     }
-    setBatchRunning(false);
-    setBatchProgress(null);
-    setProgress(null);
+    setBatchRunning(false); setBatchProgress(null); setProgress(null);
     setBatchDoneResult({ total: batchFiles.length, succeeded, failed, outputDir });
     setScreen("batch-done");
   };
@@ -985,7 +974,7 @@ export default function App() {
     setDoneResult(null); setBatchDoneResult(null);
     setVideoEdits(null); setShowEditor(false);
     setEditingBatchIdx(-1); setBatchEditInfo(null);
-    pendingPresetRef.current = null;
+    setDirectFile(""); setDirectPreset(""); setDirectStatus("idle"); setDirectError("");
   };
 
   const currentOrig = origFrames[frameIdx];
@@ -1005,7 +994,6 @@ export default function App() {
       })()
     : null;
 
-  // Progress pass label — shows actual encoder name
   const passLabel = (() => {
     if (!progress) return "";
     if (progress.percent >= 100) return "Finalizing";
@@ -1021,10 +1009,7 @@ export default function App() {
     return "Pass 2 / 2 — Encoding";
   })();
 
-  // Preview tag label
   const previewTagExtra = gpuShortLabel(codec, gpuEncoder);
-
-  // Discord Ready is unreliable with GPU encoders (bitrate control is imprecise)
   const gpuSelected = gpuEncoder !== "cpu";
 
   return (
@@ -1032,9 +1017,7 @@ export default function App() {
 
       {/* ── ENCODER INFO MODAL ── */}
       {encoderInfoOpen && (
-        <EncoderInfoModal
-          onClose={() => setEncoderInfoOpen(false)}
-        />
+        <EncoderInfoModal onClose={() => setEncoderInfoOpen(false)} />
       )}
 
       {/* ── BATCH PER-CLIP EDITOR OVERLAY ── */}
@@ -1059,10 +1042,7 @@ export default function App() {
           info={info}
           theme={theme}
           initialEdits={videoEdits}
-          onConfirm={(edits) => {
-            setVideoEdits(edits);
-            setShowEditor(false);
-          }}
+          onConfirm={(edits) => { setVideoEdits(edits); setShowEditor(false); }}
           onCancel={() => setShowEditor(false)}
         />
       )}
@@ -1099,6 +1079,40 @@ export default function App() {
               <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
               <div className="loading-label">Reading file &amp; extracting frames&hellip;</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DIRECT ENCODE (context menu Discord Ready shortcut) ── */}
+      {screen === "direct-encode" && (
+        <div className="loading-screen">
+          <div className="loading-content">
+            <div className="loading-wordmark">
+              <QELogo size={18} />
+              <span>quick encode<em>.</em></span>
+            </div>
+            {directStatus === "probing" && (
+              <div className="loading-bar-wrap">
+                <div className="loading-bar-bg"><div className="loading-bar-fill" /></div>
+                <div className="loading-label">Reading file info&hellip;</div>
+              </div>
+            )}
+            {directStatus === "saving" && (
+              <div className="loading-label" style={{ marginTop: 12 }}>Choose where to save&hellip;</div>
+            )}
+            {directStatus === "error" && (
+              <>
+                <div className="loading-label" style={{ marginTop: 12, color: "var(--color-error)" }}>
+                  ❌ {directError}
+                </div>
+                <button className="drop-browse" style={{ marginTop: 16 }} onClick={reset}>Back</button>
+              </>
+            )}
+            {directStatus !== "error" && (
+              <div className="loading-label" style={{ marginTop: 8, opacity: 0.5, fontSize: "0.75rem" }}>
+                {basename(directFile)}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1265,7 +1279,6 @@ export default function App() {
                   className="preset-btn"
                   onClick={() => startBatch(true)}
                   disabled={batchRunning || gpuSelected}
-                  title={gpuSelected ? "Unreliable with GPU encoding — switch to Software (CPU) for accurate file size targeting" : "Encode all files targeting ≤10 MB for Discord"}
                 >
                   <DiscordIcon />
                   Discord Ready
@@ -1390,7 +1403,6 @@ export default function App() {
               className="preset-btn"
               onClick={() => setShowEditor(true)}
               disabled={encoding}
-              title="Open video editor"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -1407,7 +1419,6 @@ export default function App() {
                 className="preset-btn"
                 onClick={handleDiscord}
                 disabled={encoding || gpuSelected}
-                title={gpuSelected ? "Unreliable with GPU encoding — switch to Software (CPU) for accurate file size targeting" : "Encode targeting ≤10 MB for Discord"}
               >
                 <DiscordIcon />
                 Discord Ready

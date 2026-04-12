@@ -47,9 +47,11 @@ pub fn run() {
             if let Some(path) = file_arg {
                 let handle = app.handle().clone();
                 let preset = preset_arg.clone();
-                // Small delay so the webview has time to mount its listener
+                // Delay so the webview finishes mounting before we emit.
+                // 1200 ms is conservative but safe — the GPU probe and React
+                // mount both need to settle before the listener is ready.
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
                     let _ = handle.emit(OPEN_FILE_EVENT, OpenFilePayload { path, preset });
                 });
             }
