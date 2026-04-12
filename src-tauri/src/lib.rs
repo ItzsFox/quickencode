@@ -38,8 +38,8 @@ pub fn run() {
                 let _ = window.set_focus();
                 let _ = window.unminimize();
             }
-            if let Some(path) = parse_arg(argv, "--file") {
-                let preset = parse_arg(argv, "--preset");
+            if let Some(path) = parse_arg(&argv, "--file") {
+                let preset = parse_arg(&argv, "--preset");
                 let _ = app.emit(OPEN_FILE_EVENT, OpenFilePayload { path, preset });
             }
         }))
