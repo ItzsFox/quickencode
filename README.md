@@ -1,7 +1,7 @@
 <div align="center">
   <img src="src-tauri/icons/icon.png" width="72" height="72" alt="quick encode logo" />
   <h1>quick encode.</h1>
-  <p>A fast, minimal video compressor built with Tauri + React.</p>
+  <p>A fast, minimal video compressor.</p>
   <p>
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-blue?style=flat-square" />
     <img alt="Built with Tauri" src="https://img.shields.io/badge/built_with-Tauri_v2-24C8D8?style=flat-square" />
