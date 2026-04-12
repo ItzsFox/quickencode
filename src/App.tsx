@@ -1172,7 +1172,7 @@ export default function App() {
                     <polyline points="1 4 1 10 7 10" />
                     <path d="M3.51 15a9 9 0 1 0 .49-4.95" />
                   </svg>
-                  Re-encode same clip
+                   Encode same file
                 </button>
                 <button className="done-btn-new" onClick={reset}>Import new file</button>
               </div>
