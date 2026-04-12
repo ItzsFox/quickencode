@@ -975,6 +975,17 @@ export default function App() {
     setDirectFile(""); setDirectStatus("idle"); setDirectError("");
   };
 
+  // Re-import the same clip that was just encoded, preserving all settings
+  const reencodeCurrentFile = () => {
+    if (!filePath) return;
+    const pathToReload = filePath;
+    // Clear encode result and re-run loadFile for the same path
+    setDoneResult(null);
+    setVideoEdits(null);
+    setShowEditor(false);
+    loadFile(pathToReload);
+  };
+
   const currentOrig = origFrames[frameIdx];
   const currentEnc  = encFrames[frameIdx];
   const previewAspect = info ? info.width / info.height : 16 / 9;
@@ -1155,6 +1166,13 @@ export default function App() {
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                   </svg>
                   Show in folder
+                </button>
+                <button className="done-btn-new" onClick={reencodeCurrentFile}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="1 4 1 10 7 10" />
+                    <path d="M3.51 15a9 9 0 1 0 .49-4.95" />
+                  </svg>
+                  Re-encode same clip
                 </button>
                 <button className="done-btn-new" onClick={reset}>Import new file</button>
               </div>
