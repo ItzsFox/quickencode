@@ -1,6 +1,10 @@
 ; context-menu.nsh
 ; NSIS include: registers / unregisters the Windows shell context menu
-; entry for QuickEncode "Encode for Discord" on .mp4 files.
+; submenu for QuickEncode on .mp4 files.
+;
+; Right-clicking an .mp4 will show:
+;   > Quick Encode
+;       Encode for Discord Ready
 ;
 ; Usage in your main .nsi script:
 ;   !include "context-menu.nsh"
@@ -12,36 +16,57 @@
 
 ; ---------------------------------------------------------------------------
 ; RegisterContextMenu
-; Writes the registry keys that add "Encode for Discord" to the right-click
-; menu of .mp4 files for the current user (HKCU — no admin needed).
+; Writes the registry keys that add a "Quick Encode" submenu to the
+; right-click menu of .mp4 files (HKCU — no admin needed).
 ; ---------------------------------------------------------------------------
 Function RegisterContextMenu
-    ; Root key for .mp4 shell extensions (per-user, no elevation required)
-    WriteRegStr HKCU \
-        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode.Discord" \
-        "" \
-        "Encode for Discord"
 
-    ; Icon: show the app icon next to the menu entry
+    ; --- Parent submenu entry ---
+    ; MUIVerb = the label shown in the context menu
     WriteRegStr HKCU \
-        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode.Discord" \
+        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode" \
+        "MUIVerb" \
+        "Quick Encode"
+
+    ; SubCommands = empty string tells Windows this is a submenu container
+    WriteRegStr HKCU \
+        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode" \
+        "SubCommands" \
+        ""
+
+    ; Icon: show the app icon next to the parent menu entry
+    WriteRegStr HKCU \
+        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode" \
         "Icon" \
         '"$INSTDIR\quickencode.exe",0'
 
+    ; --- Submenu shell container key ---
+    WriteRegStr HKCU \
+        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell" \
+        "" \
+        ""
+
+    ; --- Child: Encode for Discord Ready ---
+    WriteRegStr HKCU \
+        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\DiscordReady" \
+        "" \
+        "Encode for Discord Ready"
+
     ; Command: launch QuickEncode with --file "<selected file>"
     WriteRegStr HKCU \
-        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode.Discord\command" \
+        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\DiscordReady\command" \
         "" \
         '"$INSTDIR\quickencode.exe" --file "%1"'
+
 FunctionEnd
 
 ; ---------------------------------------------------------------------------
 ; UnRegisterContextMenu
-; Removes the registry keys added above.
+; Removes all registry keys added above (full subtree).
 ; ---------------------------------------------------------------------------
 Function UnRegisterContextMenu
     DeleteRegKey HKCU \
-        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode.Discord"
+        "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode"
 FunctionEnd
 
 !endif ; QUICKENCODE_NSH_INCLUDED
