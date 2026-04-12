@@ -490,7 +490,6 @@ export default function App() {
 
   // State for the direct-encode screen (context menu Discord Ready shortcut)
   const [directFile, setDirectFile]         = useState("");
-  const [directPreset, setDirectPreset]     = useState("");
   const [directStatus, setDirectStatus]     = useState<"idle" | "probing" | "saving" | "encoding" | "done" | "error">("idle");
   const [directError, setDirectError]       = useState("");
 
@@ -612,7 +611,6 @@ export default function App() {
   // Skips frame extraction entirely. Flow: probe info → save dialog → encode.
   const runDirectEncode = useCallback(async (path: string, preset: string) => {
     setDirectFile(path);
-    setDirectPreset(preset);
     setScreen("direct-encode");
     setDirectStatus("probing");
     setDirectError("");
@@ -974,7 +972,7 @@ export default function App() {
     setDoneResult(null); setBatchDoneResult(null);
     setVideoEdits(null); setShowEditor(false);
     setEditingBatchIdx(-1); setBatchEditInfo(null);
-    setDirectFile(""); setDirectPreset(""); setDirectStatus("idle"); setDirectError("");
+    setDirectFile(""); setDirectStatus("idle"); setDirectError("");
   };
 
   const currentOrig = origFrames[frameIdx];
