@@ -9,7 +9,7 @@
                      Key="Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode">
           <RegistryValue Type="string" Name="MUIVerb"     Value="Quick Encode" />
           <RegistryValue Type="string" Name="SubCommands" Value="" />
-          <RegistryValue Type="string" Name="Icon"        Value="[INSTALLFOLDER]quickencode.exe,0" />
+          <RegistryValue Type="string" Name="Icon"        Value="[APPLICATIONFOLDER]quickencode.exe,0" />
         </RegistryKey>
 
         <!-- Submenu shell container -->
@@ -25,7 +25,7 @@
         </RegistryKey>
         <RegistryKey Root="HKCU"
                      Key="Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\01_Import\command">
-          <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]quickencode.exe&quot; --file &quot;%1&quot;" />
+          <RegistryValue Type="string" Value="&quot;[APPLICATIONFOLDER]quickencode.exe&quot; --file &quot;%1&quot;" />
         </RegistryKey>
 
         <!-- 2. Encode with Discord Ready (H.264) -->
@@ -35,7 +35,7 @@
         </RegistryKey>
         <RegistryKey Root="HKCU"
                      Key="Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\03_Discord\command">
-          <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]quickencode.exe&quot; --file &quot;%1&quot; --preset discord" />
+          <RegistryValue Type="string" Value="&quot;[APPLICATIONFOLDER]quickencode.exe&quot; --file &quot;%1&quot; --preset discord" />
         </RegistryKey>
 
         <!-- 3. Encode with Discord Ready (AV1) -->
@@ -45,7 +45,7 @@
         </RegistryKey>
         <RegistryKey Root="HKCU"
                      Key="Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\04_DiscordAV1\command">
-          <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]quickencode.exe&quot; --file &quot;%1&quot; --preset discord-av1" />
+          <RegistryValue Type="string" Value="&quot;[APPLICATIONFOLDER]quickencode.exe&quot; --file &quot;%1&quot; --preset discord-av1" />
         </RegistryKey>
 
       </Component>
