@@ -41,6 +41,11 @@
     "externalBin": [
       "binaries/ffmpeg",
       "binaries/ffprobe"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsi"
+      }
+    }
   }
 }
