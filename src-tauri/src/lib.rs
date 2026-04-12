@@ -1,6 +1,6 @@
 mod commands;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Emitted to the frontend when the app is launched/focused with a file path
 /// via the right-click "Encode for Discord" context menu entry.
