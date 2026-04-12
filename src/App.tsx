@@ -47,6 +47,12 @@ interface GpuEncoderInfo {
   supported_codecs: string[]; // e.g. ["h264", "h265", "av1"]
 }
 
+/** Payload emitted by the Rust backend for the open-file event */
+interface OpenFilePayload {
+  path:   string;
+  preset: string | null;
+}
+
 /** Re-export so App internal code can still use VideoEdits without importing types directly */
 export type { VideoEdits };
 
@@ -507,6 +513,10 @@ export default function App() {
 
   const encDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+
+  // Pending preset to run after loadFile completes (e.g. "discord" from context menu)
+  const pendingPresetRef = useRef<string | null>(null);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -623,6 +633,55 @@ export default function App() {
       const b = resolution === "original" ? videoInfo.bitrate_kbps : (RES_BITRATES[resolution] ?? videoInfo.bitrate_kbps);
       const vbr = Math.max(Math.round(b * (quality / 100)), 80);
       loadEncodedFrame(0, vbr, resolution, fps, codec, gpuEncoder);
+
+      // If a preset was queued from the context menu, fire it now
+      const preset = pendingPresetRef.current;
+      pendingPresetRef.current = null;
+      if (preset === "discord" || preset === "discord-av1") {
+        const discordCodec = preset === "discord-av1" ? "av1" : "h264";
+        const activeTracks = Math.max(videoInfo.audio_tracks?.length ?? 1, 1);
+        const vbrDisc = discordBr(videoInfo.duration_secs, activeTracks);
+        const totalAudioKbps = DISCORD_AUDIO * activeTracks;
+        const defaultName = path.split(/[\\\/]/).pop()?.replace(/\.[^.]+$/, "") + "_discord.mp4";
+        const out = await save({ defaultPath: defaultName, filters: [{ name: "MP4", extensions: ["mp4"] }] });
+        if (out) {
+          // runEncode reads state, so we call it imperatively via the refs below
+          setEncoding(true);
+          setCancelling(false);
+          setProgress({ percent: 0, eta_secs: 0, pass: 1 });
+          try {
+            await invoke("encode_video_with_progress", {
+              input:            path,
+              output:           out,
+              resolution:       resolution,
+              videoBitrateKbps: vbrDisc,
+              audioBitrateKbps: totalAudioKbps,
+              fps:              fps,
+              durationSecs:     videoInfo.duration_secs,
+              trimStart:        null,
+              trimEnd:          null,
+              deletedTracks:    [],
+              volumeMap:        {},
+              totalAudioTracks: videoInfo.audio_tracks?.length ?? 1,
+              mergeAudioTracks: false,
+              codec:            discordCodec,
+              gpuEncoder:       "cpu",
+            });
+            let finalMb = 0;
+            try { finalMb = await invoke<number>("get_file_size_mb", { path: out }); } catch {}
+            setDoneResult({ outputPath: out, originalMb: videoInfo.size_mb, finalMb });
+            setScreen("done");
+          } catch (e) {
+            const msg = String(e);
+            if (msg !== "cancelled") setStatus(`❌ ${msg}`);
+            setScreen("editor");
+          } finally {
+            setEncoding(false);
+            setCancelling(false);
+            setProgress(null);
+          }
+        }
+      }
     } catch (e) {
       setStatus(`❌ ${e}`);
       setScreen("drop");
@@ -678,6 +737,19 @@ export default function App() {
     }).then(fn => { unlisten = fn; });
     return () => unlisten?.();
   }, []);
+
+  // ── Listen for open-file events from the context menu / single-instance handler ──
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<OpenFilePayload>("open-file", (ev) => {
+      const { path, preset } = ev.payload;
+      if (!path) return;
+      // Store the preset so loadFile can act on it after the file loads
+      pendingPresetRef.current = preset ?? null;
+      loadFile(path);
+    }).then(fn => { unlisten = fn; });
+    return () => unlisten?.();
+  }, [loadFile]);
 
   const pickFiles = async () => {
     const result = await open({
@@ -913,6 +985,7 @@ export default function App() {
     setDoneResult(null); setBatchDoneResult(null);
     setVideoEdits(null); setShowEditor(false);
     setEditingBatchIdx(-1); setBatchEditInfo(null);
+    pendingPresetRef.current = null;
   };
 
   const currentOrig = origFrames[frameIdx];
