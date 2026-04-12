@@ -371,6 +371,7 @@ body {
   gap: 7px;
   width: 100%;
 }
+/* "Show in folder" — ghost pill */
 .done-btn-reveal {
   display: flex;
   align-items: center;
@@ -393,14 +394,14 @@ body {
   color: var(--text);
   background: var(--surface-2);
 }
-/* "Encode again" — mid-weight: filled surface-2 bg, muted text, sits between ghost and solid */
+/* "Encode again" — identical ghost style to "Show in folder" */
 .done-btn-reencode {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   padding: 7px 18px;
-  background: var(--surface-2);
+  background: none;
   border: 1px solid var(--border-2);
   border-radius: var(--radius-pill);
   font-size: 12px;
@@ -414,7 +415,7 @@ body {
 .done-btn-reencode:hover {
   border-color: var(--text-dim);
   color: var(--text);
-  background: var(--surface-3);
+  background: var(--surface-2);
 }
 /* "Import new file" — filled, same as Browse files */
 .done-btn-new {
