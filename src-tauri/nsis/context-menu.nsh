@@ -26,7 +26,7 @@ Function RegisterContextMenu
     ; ---- Parent submenu (the "Quick Encode" flyout header) ----------------
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode" \
-        "MUIVerb" "Quick Encode"
+        "MUIVerb" "quick encode."
 
     ; Empty SubCommands = Windows renders this as a submenu, not a direct action
     WriteRegStr HKCU \
@@ -46,7 +46,7 @@ Function RegisterContextMenu
     ; ---- 1. Add to Quick Encode (plain import, no preset) -----------------
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\01_Import" \
-        "" "Add to Quick Encode"
+        "" "Add to quick encode."
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\01_Import\command" \
         "" '"$INSTDIR\quickencode.exe" --file "%1"'
