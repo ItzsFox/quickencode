@@ -59,17 +59,28 @@ pub fn resolve_bin(_app: &tauri::AppHandle, name: &str) -> Result<std::path::Pat
 // ── GPU encoder identifiers ───────────────────────────────────────────────────
 // gpu_encoder string values:
 //   "cpu"            → software encoding
-//   "nvenc"          → NVIDIA (h264_nvenc / hevc_nvenc / av1_nvenc)
+//   "nvenc:N"        → NVIDIA GPU index N (h264_nvenc / hevc_nvenc / av1_nvenc)
 //   "qsv"            → Intel QuickSync (h264_qsv / hevc_qsv / av1_qsv)
 //   "amf"            → AMD AMF (h264_amf / hevc_amf)  — no AV1 yet
 //   "videotoolbox"   → Apple (h264_videotoolbox / hevc_videotoolbox) — no AV1
 //
-// codec string values (replaces the old use_av1 bool):
+// codec string values:
 //   "h264" | "h265" | "av1"
+
+/// Split a gpu_encoder value like "nvenc:2" into ("nvenc", 2).
+/// Values without a colon (e.g. "qsv", "cpu") return index 0.
+fn parse_gpu_encoder(gpu_encoder: &str) -> (&str, u32) {
+    if let Some((kind, idx_str)) = gpu_encoder.split_once(':') {
+        let idx = idx_str.parse::<u32>().unwrap_or(0);
+        (kind, idx)
+    } else {
+        (gpu_encoder, 0)
+    }
+}
 
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct GpuEncoderInfo {
-    pub id:               String,   // "nvenc" | "qsv" | "amf" | "videotoolbox"
+    pub id:               String,   // "nvenc:0" | "nvenc:1" | "qsv" | "amf" | "videotoolbox"
     pub label:            String,   // Human-readable label
     pub supported_codecs: Vec<String>, // subset of ["h264", "h265", "av1"]
 }
@@ -96,24 +107,21 @@ fn test_encoder(ffmpeg: &std::path::Path, encoder: &str) -> bool {
     matches!(status, Ok(s) if s.success())
 }
 
-/// Stricter NVENC capability test that forces CUDA hardware device initialisation.
-/// The plain test_encoder() is a false positive on Pascal GPUs (GTX 10xx):
-/// av1_nvenc and sometimes hevc_nvenc exit 0 on a 64×64 synthetic encode but
-/// fail immediately on real content (exit -542398553 / 0xDFFFFFEB).
-///
-/// Uses 128x128 (above NVENC minimum of 145x? — profile main is explicit to
-/// satisfy Pascal's HEVC engine which rejects the default "main10" profile).
-fn test_nvenc_codec(ffmpeg: &std::path::Path, encoder: &str) -> bool {
-    // For HEVC specifically, we must pass -profile:v main — Pascal's hevc_nvenc
-    // engine doesn't support main10 and will exit 0 on a tiny test frame but
-    // fail with 0xDFFFFFEB on real encodes without an explicit profile.
+/// Stricter NVENC capability test for a specific GPU index.
+/// Forces CUDA device initialisation with `-init_hw_device cuda=gpu:N`.
+/// Uses 128x128 with explicit `-profile:v main` for HEVC to avoid false
+/// positives on Pascal (GTX 10xx) where hevc_nvenc exits 0 on tiny frames
+/// but fails with 0xDFFFFFEB on real content.
+fn test_nvenc_codec(ffmpeg: &std::path::Path, encoder: &str, gpu_idx: u32) -> bool {
+    let gpu_idx_str = gpu_idx.to_string();
+    let hw_device   = format!("cuda=gpu:{gpu_idx}");
     let mut args: Vec<&str> = vec![
         "-hide_banner",
-        "-init_hw_device", "cuda=gpu:0",
+        "-init_hw_device", &hw_device,
         "-f", "lavfi", "-i", "color=black:s=128x128:r=1",
         "-vframes", "1",
         "-c:v", encoder,
-        "-gpu", "0",
+        "-gpu", &gpu_idx_str,
     ];
     if encoder == "hevc_nvenc" {
         args.extend(["-profile:v", "main"]);
@@ -133,20 +141,13 @@ fn test_nvenc_codec(ffmpeg: &std::path::Path, encoder: &str) -> bool {
 }
 
 /// Probe ffmpeg to see which GPU encoders are actually available on this machine.
-/// Uses a two-step approach:
-///   1. Check ffmpeg -encoders to see which encoder names are compiled in.
-///   2. For each candidate, run a 1-frame test encode to confirm the GPU
-///      actually supports it at runtime (encoder names can appear even on
-///      incompatible hardware).
 ///
-/// NVENC uses a stricter cuda-device-backed test (test_nvenc_codec) to avoid
-/// false positives on Pascal GPUs (GTX 10xx) where av1_nvenc / hevc_nvenc
-/// appear in the encoder list but lack hardware support.
+/// For NVENC specifically, each CUDA device index is probed individually
+/// (0, 1, 2 … up to 8) so that multi-GPU systems expose all available GPUs
+/// as separate selectable entries (e.g. "nvenc:0", "nvenc:1").
 ///
 /// NOTE: This command is async and runs on a blocking thread pool so it does
-/// NOT freeze the Tauri main thread / UI during startup. The test encodes can
-/// take up to a second each on a cold GPU; without spawn_blocking the app would
-/// visibly lag/freeze while probing.
+/// NOT freeze the Tauri main thread / UI during startup.
 #[tauri::command]
 pub async fn probe_gpu_encoders(app: tauri::AppHandle) -> Vec<GpuEncoderInfo> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -174,33 +175,60 @@ fn probe_gpu_encoders_sync(app: &tauri::AppHandle) -> Vec<GpuEncoderInfo> {
 
     let mut result = vec![];
 
-    // NVENC — NVIDIA
-    // Use test_nvenc_codec (stricter) instead of test_encoder for all NVENC paths.
+    // ── NVENC — enumerate each CUDA device index individually ────────────────
+    // This allows multi-GPU systems to expose every card as a separate option.
+    // We probe indices 0..=7 and stop as soon as a cuda device fails to init.
     // GTX 10xx (Pascal): h264_nvenc + hevc_nvenc work, av1_nvenc does NOT.
-    // RTX 20xx/30xx (Turing/Ampere): h264 + hevc work, av1 does NOT.
-    // RTX 40xx+ (Ada Lovelace): all three work.
-    if stdout.contains("h264_nvenc") || stdout.contains("hevc_nvenc") || stdout.contains("av1_nvenc") {
-        let mut codecs = vec![];
-        if stdout.contains("h264_nvenc") && test_nvenc_codec(&ffmpeg, "h264_nvenc") {
-            codecs.push("h264".to_string());
-        }
-        if stdout.contains("hevc_nvenc") && test_nvenc_codec(&ffmpeg, "hevc_nvenc") {
-            codecs.push("h265".to_string());
-        }
-        if stdout.contains("av1_nvenc") && test_nvenc_codec(&ffmpeg, "av1_nvenc") {
-            codecs.push("av1".to_string());
-        }
-        if !codecs.is_empty() {
+    // RTX 20xx/30xx:     h264 + hevc work, av1 does NOT.
+    // RTX 40xx+ (Ada):   all three work.
+    let has_any_nvenc = stdout.contains("h264_nvenc")
+        || stdout.contains("hevc_nvenc")
+        || stdout.contains("av1_nvenc");
+
+    if has_any_nvenc {
+        for gpu_idx in 0u32..=7 {
+            // If this index's h264_nvenc fails to init, there's no more GPU at
+            // this index — stop enumerating.
+            let h264_ok = stdout.contains("h264_nvenc")
+                && test_nvenc_codec(&ffmpeg, "h264_nvenc", gpu_idx);
+
+            if !h264_ok && gpu_idx > 0 {
+                // Index 0 might still have only hevc/av1; don't stop there.
+                // For idx > 0: if h264_nvenc fails the device doesn't exist.
+                break;
+            }
+
+            let mut codecs = vec![];
+            if h264_ok {
+                codecs.push("h264".to_string());
+            }
+            if stdout.contains("hevc_nvenc") && test_nvenc_codec(&ffmpeg, "hevc_nvenc", gpu_idx) {
+                codecs.push("h265".to_string());
+            }
+            if stdout.contains("av1_nvenc") && test_nvenc_codec(&ffmpeg, "av1_nvenc", gpu_idx) {
+                codecs.push("av1".to_string());
+            }
+
+            if codecs.is_empty() {
+                // Nothing supported on this index at all — stop.
+                break;
+            }
+
+            let label = if gpu_idx == 0 {
+                "NVIDIA NVENC (GPU 0)".to_string()
+            } else {
+                format!("NVIDIA NVENC (GPU {gpu_idx})")
+            };
+
             result.push(GpuEncoderInfo {
-                id:               "nvenc".into(),
-                label:            "NVIDIA NVENC".into(),
+                id:               format!("nvenc:{gpu_idx}"),
+                label,
                 supported_codecs: codecs,
             });
         }
     }
 
-    // QuickSync — Intel iGPU / Arc
-    // AV1 QSV requires Arc (Alchemist) or 12th-gen+ iGPU; test individually.
+    // ── QuickSync — Intel iGPU / Arc ─────────────────────────────────────────
     if stdout.contains("h264_qsv") || stdout.contains("hevc_qsv") || stdout.contains("av1_qsv") {
         let mut codecs = vec![];
         if stdout.contains("h264_qsv") && test_encoder(&ffmpeg, "h264_qsv") {
@@ -221,7 +249,7 @@ fn probe_gpu_encoders_sync(app: &tauri::AppHandle) -> Vec<GpuEncoderInfo> {
         }
     }
 
-    // AMF — AMD (no AV1 in most ffmpeg builds; no test needed for av1_amf)
+    // ── AMF — AMD ─────────────────────────────────────────────────────────────
     if stdout.contains("h264_amf") || stdout.contains("hevc_amf") {
         let mut codecs = vec![];
         if stdout.contains("h264_amf") && test_encoder(&ffmpeg, "h264_amf") {
@@ -239,7 +267,7 @@ fn probe_gpu_encoders_sync(app: &tauri::AppHandle) -> Vec<GpuEncoderInfo> {
         }
     }
 
-    // VideoToolbox — macOS
+    // ── VideoToolbox — macOS ──────────────────────────────────────────────────
     if stdout.contains("h264_videotoolbox") || stdout.contains("hevc_videotoolbox") {
         let mut codecs = vec![];
         if stdout.contains("h264_videotoolbox") && test_encoder(&ffmpeg, "h264_videotoolbox") {
@@ -276,10 +304,6 @@ fn probe_av1_encoder(ffmpeg: &std::path::Path) -> &'static str {
 }
 
 // ── nvenc_bufsize ─────────────────────────────────────────────────────────────
-// Returns a bufsize string that is 2× the target bitrate.
-// A 1× bufsize is too tight — NVENC's internal rate smoother compensates by
-// letting individual GOPs overshoot. 2× gives it room to smooth without going
-// over the overall ceiling.
 fn nvenc_bufsize(video_bv: &str) -> String {
     let kbps: u64 = video_bv
         .trim_end_matches('k')
@@ -290,7 +314,7 @@ fn nvenc_bufsize(video_bv: &str) -> String {
 
 /// Resolve which concrete ffmpeg video codec to use.
 /// `codec`       — "h264" | "h265" | "av1"
-/// `gpu_encoder` — "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
+/// `gpu_encoder` — "cpu" | "nvenc:N" | "qsv" | "amf" | "videotoolbox"
 /// Returns `(codec_args, is_single_pass)`.
 fn resolve_video_codec(
     codec:       &str,
@@ -298,23 +322,24 @@ fn resolve_video_codec(
     video_bv:    &str,
     ffmpeg:      &std::path::Path,
 ) -> (Vec<String>, bool) {
-    match (codec, gpu_encoder) {
+    let (enc_type, gpu_idx) = parse_gpu_encoder(gpu_encoder);
+    let gpu_idx_str = gpu_idx.to_string();
+
+    match (codec, enc_type) {
 
         // ── AV1 paths ────────────────────────────────────────────────────────
-        // NVENC AV1: -rc cbr + 2-pass lookahead (-2pass 1 -multipass fullres)
-        // for tight bitrate targeting. bufsize = 2× target.
         ("av1", "nvenc") => (vec![
             "-c:v".into(), "av1_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "cbr".into(),
             "-2pass".into(), "1".into(),
             "-multipass".into(), "fullres".into(),
+            "-gpu".into(), gpu_idx_str,
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), nvenc_bufsize(video_bv),
         ], true),
 
-        // QSV: -bufsize enforces the ceiling.
         ("av1", "qsv") => (vec![
             "-c:v".into(), "av1_qsv".into(),
             "-preset".into(), "medium".into(),
@@ -324,7 +349,6 @@ fn resolve_video_codec(
         ], true),
 
         // AMD AMF has no AV1 — fall back to hevc_amf.
-        // Add -rc cbr so AMF respects -maxrate/-b:v as a hard limit.
         ("av1", "amf") => (vec![
             "-c:v".into(), "hevc_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -334,7 +358,6 @@ fn resolve_video_codec(
         ], true),
 
         // VideoToolbox has no AV1 — fall back to hevc_videotoolbox.
-        // Set -maxrate = -minrate = -b:v to force CBR behaviour.
         ("av1", "videotoolbox") => (vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -364,8 +387,6 @@ fn resolve_video_codec(
         }
 
         // ── H.265 (HEVC) paths ───────────────────────────────────────────────
-        // -profile:v main is required for Pascal (GTX 10xx) hevc_nvenc.
-        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         ("h265", "nvenc") => (vec![
             "-c:v".into(), "hevc_nvenc".into(),
             "-profile:v".into(), "main".into(),
@@ -373,12 +394,12 @@ fn resolve_video_codec(
             "-rc".into(), "cbr".into(),
             "-2pass".into(), "1".into(),
             "-multipass".into(), "fullres".into(),
+            "-gpu".into(), gpu_idx_str,
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), nvenc_bufsize(video_bv),
         ], true),
 
-        // QSV: -bufsize enforces the ceiling.
         ("h265", "qsv") => (vec![
             "-c:v".into(), "hevc_qsv".into(),
             "-preset".into(), "medium".into(),
@@ -387,7 +408,6 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // AMF: -rc cbr.
         ("h265", "amf") => (vec![
             "-c:v".into(), "hevc_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -396,7 +416,6 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // VideoToolbox: -maxrate/-minrate to force CBR.
         ("h265", "videotoolbox") => (vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -404,7 +423,6 @@ fn resolve_video_codec(
             "-minrate".into(), video_bv.into(),
         ], true),
 
-        // H.265 CPU — libx265 single-pass
         ("h265", _) => (vec![
             "-c:v".into(), "libx265".into(),
             "-b:v".into(), video_bv.into(),
@@ -412,19 +430,18 @@ fn resolve_video_codec(
         ], true),
 
         // ── H.264 paths ──────────────────────────────────────────────────────
-        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         (_, "nvenc") => (vec![
             "-c:v".into(), "h264_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "cbr".into(),
             "-2pass".into(), "1".into(),
             "-multipass".into(), "fullres".into(),
+            "-gpu".into(), gpu_idx_str,
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), nvenc_bufsize(video_bv),
         ], true),
 
-        // QSV: -bufsize enforces the ceiling.
         (_, "qsv") => (vec![
             "-c:v".into(), "h264_qsv".into(),
             "-preset".into(), "medium".into(),
@@ -433,7 +450,6 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // AMF: -rc cbr.
         (_, "amf") => (vec![
             "-c:v".into(), "h264_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -442,7 +458,6 @@ fn resolve_video_codec(
             "-bufsize".into(), video_bv.into(),
         ], true),
 
-        // VideoToolbox: -maxrate/-minrate to force CBR.
         (_, "videotoolbox") => (vec![
             "-c:v".into(), "h264_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -450,7 +465,7 @@ fn resolve_video_codec(
             "-minrate".into(), video_bv.into(),
         ], true),
 
-        // H.264 CPU — 2-pass with maxrate/bufsize to enforce the size ceiling
+        // H.264 CPU — 2-pass
         (_, _) => (vec![
             "-c:v".into(), "libx264".into(),
             "-b:v".into(), video_bv.into(),
@@ -467,20 +482,21 @@ fn resolve_video_codec_preview(
     video_bv:    &str,
     ffmpeg:      &std::path::Path,
 ) -> Vec<String> {
-    match (codec, gpu_encoder) {
-        // AV1
-        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
+    let (enc_type, gpu_idx) = parse_gpu_encoder(gpu_encoder);
+    let gpu_idx_str = gpu_idx.to_string();
+
+    match (codec, enc_type) {
         ("av1", "nvenc") => vec![
             "-c:v".into(), "av1_nvenc".into(),
             "-preset".into(), "p4".into(),
             "-rc".into(), "cbr".into(),
             "-2pass".into(), "1".into(),
             "-multipass".into(), "fullres".into(),
+            "-gpu".into(), gpu_idx_str,
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), nvenc_bufsize(video_bv),
         ],
-        // QSV: -bufsize.
         ("av1", "qsv") => vec![
             "-c:v".into(), "av1_qsv".into(),
             "-preset".into(), "faster".into(),
@@ -488,7 +504,6 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // AMF: -rc cbr.
         ("av1", "amf") => vec![
             "-c:v".into(), "hevc_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -496,7 +511,6 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // VideoToolbox: -maxrate/-minrate.
         ("av1", "videotoolbox") => vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -521,8 +535,6 @@ fn resolve_video_codec_preview(
                 ]
             }
         }
-        // H.265
-        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         ("h265", "nvenc") => vec![
             "-c:v".into(), "hevc_nvenc".into(),
             "-profile:v".into(), "main".into(),
@@ -530,11 +542,11 @@ fn resolve_video_codec_preview(
             "-rc".into(), "cbr".into(),
             "-2pass".into(), "1".into(),
             "-multipass".into(), "fullres".into(),
+            "-gpu".into(), gpu_idx_str,
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), nvenc_bufsize(video_bv),
         ],
-        // QSV: -bufsize.
         ("h265", "qsv") => vec![
             "-c:v".into(), "hevc_qsv".into(),
             "-preset".into(), "faster".into(),
@@ -542,7 +554,6 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // AMF: -rc cbr.
         ("h265", "amf") => vec![
             "-c:v".into(), "hevc_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -550,7 +561,6 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // VideoToolbox: -maxrate/-minrate.
         ("h265", "videotoolbox") => vec![
             "-c:v".into(), "hevc_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -563,19 +573,17 @@ fn resolve_video_codec_preview(
             "-b:v".into(), video_bv.into(),
             "-x265-params".into(), "log-level=error".into(),
         ],
-        // H.264
-        // NVENC: -rc cbr + 2-pass lookahead + 2× bufsize.
         (_, "nvenc") => vec![
             "-c:v".into(), "h264_nvenc".into(),
             "-preset".into(), "p1".into(),
             "-rc".into(), "cbr".into(),
             "-2pass".into(), "1".into(),
             "-multipass".into(), "fullres".into(),
+            "-gpu".into(), gpu_idx_str,
             "-b:v".into(), video_bv.into(),
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), nvenc_bufsize(video_bv),
         ],
-        // QSV: -bufsize.
         (_, "qsv") => vec![
             "-c:v".into(), "h264_qsv".into(),
             "-preset".into(), "faster".into(),
@@ -583,7 +591,6 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // AMF: -rc cbr.
         (_, "amf") => vec![
             "-c:v".into(), "h264_amf".into(),
             "-rc".into(), "cbr".into(),
@@ -591,7 +598,6 @@ fn resolve_video_codec_preview(
             "-maxrate".into(), video_bv.into(),
             "-bufsize".into(), video_bv.into(),
         ],
-        // VideoToolbox: -maxrate/-minrate.
         (_, "videotoolbox") => vec![
             "-c:v".into(), "h264_videotoolbox".into(),
             "-b:v".into(), video_bv.into(),
@@ -1046,7 +1052,7 @@ pub async fn encode_video_with_progress(
     total_audio_tracks: usize,
     merge_audio_tracks: bool,
     codec: String,       // "h264" | "h265" | "av1"
-    gpu_encoder: String, // "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox"
+    gpu_encoder: String, // "cpu" | "nvenc:N" | "qsv" | "amf" | "videotoolbox"
 ) -> Result<String, String> {
     CANCEL_FLAG.store(false, Ordering::SeqCst);
 
@@ -1059,8 +1065,6 @@ pub async fn encode_video_with_progress(
             .filter(|i| !deleted_tracks.contains(i))
             .collect();
 
-        // Divide total audio budget by active track count so -b:a is per-track
-        // and the total audio bitrate stays within the preset's target.
         let active_count = active_audio.len().max(1) as u32;
         let per_track_kbps = (audio_bitrate_kbps / active_count).max(1);
         let audio_ba    = format!("{}k", per_track_kbps);
