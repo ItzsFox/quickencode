@@ -36,7 +36,7 @@ Function RegisterContextMenu
     ; App icon shown next to the parent entry
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode" \
-        "Icon" '"$INSTDIR\quickencode.exe",0'
+        "Icon" '"$INSTDIR\quick-encode.exe",0'
 
     ; ---- Submenu shell container ------------------------------------------
     WriteRegStr HKCU \
@@ -49,7 +49,7 @@ Function RegisterContextMenu
         "" "Add to quick encode."
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\01_Import\command" \
-        "" '"$INSTDIR\quickencode.exe" --file "%1"'
+        "" '"$INSTDIR\quick-encode.exe" --file "%1"'
 
     ; ---- Separator --------------------------------------------------------
     WriteRegStr HKCU \
@@ -62,7 +62,7 @@ Function RegisterContextMenu
         "" "Encode with Discord Ready"
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\03_Discord\command" \
-        "" '"$INSTDIR\quickencode.exe" --file "%1" --preset discord'
+        "" '"$INSTDIR\quick-encode.exe" --file "%1" --preset discord'
 
     ; ---- 3. Encode with Discord Ready (AV1) --------------------------------
     WriteRegStr HKCU \
@@ -70,7 +70,7 @@ Function RegisterContextMenu
         "" "Encode with Discord Ready (AV1)"
     WriteRegStr HKCU \
         "Software\Classes\SystemFileAssociations\.mp4\shell\QuickEncode\shell\04_DiscordAV1\command" \
-        "" '"$INSTDIR\quickencode.exe" --file "%1" --preset discord-av1'
+        "" '"$INSTDIR\quick-encode.exe" --file "%1" --preset discord-av1'
 
 FunctionEnd
 
