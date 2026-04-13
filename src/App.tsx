@@ -1322,7 +1322,7 @@ export default function App() {
                 <span className="file-chip-x">&times;</span>
               </div>
               <ThemeBtn theme={theme} onToggle={toggleTheme} />
-              <span className="version-badge">v2.1</span>
+              <span className="version-badge">v2.1.1</span>
             </div>
           </div>
 
